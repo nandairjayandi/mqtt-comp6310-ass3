@@ -1,0 +1,21 @@
+services:
+    broker:
+        build: 
+            context: .
+            dockerfile: broker/Dockerfile
+        ports:
+            - "1883:1883"
+    
+    publisher:
+        build:
+            context: .
+            dockerfile: publisher/Dockerfile
+        depends_on:
+            - broker
+
+    analyser:
+        build:
+          context: .
+          dockerfile: analyser/Dockerfile
+        depends_on:
+          - broker
