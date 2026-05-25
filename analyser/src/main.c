@@ -6,6 +6,7 @@
 #include <MQTTClient.h>
 
 #include "logger.h"
+#include "sys_mon.h"
 #include "../../shared/src/utils.h"
 
 /*
