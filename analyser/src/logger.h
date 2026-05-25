@@ -24,12 +24,17 @@ typedef struct {
 typedef struct {
     log_entry_t buf[LOGGER_BUF_SIZE]; // in-memory buffer              
     int         count; // entries currently in buffer   
-    long long   start_counter; // counter value of buf[0]      
     char        output_dir[LOGGER_DIR_MAX]; // directory to write files 
+    
+    int         pub_qos;
+    int         sub_qos;
+    int         delay_ms;
+    int         msg_size;
 } logger_t;
 
 
 int logger_init(logger_t *log, const char *output_dir);
+void logger_set_test(logger_t *log, int pub_qos, int sub_qos, int delay_ms, int msg_size);
 int logger_write(logger_t *log, long long counter, long long pub_timestamp, long long recv_timestamp, const char *topic, int msg_size);
 int logger_flush(logger_t *log);
 
