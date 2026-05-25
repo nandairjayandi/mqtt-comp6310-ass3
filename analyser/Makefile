@@ -1,7 +1,7 @@
 CC = gcc
 TARGET = analyser
 
-SRCS = src/main.c src/logger.c shared/src/utils.c
+SRCS = src/main.c src/logger.c src/sys_mon.c shared/src/utils.c
 
 CFLAGS = -Wall -Wextra -Isrc -Ishared/src -I/usr/include/paho-mqtt-c
 LDFLAGS = -lpaho-mqtt3c
