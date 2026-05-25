@@ -18,7 +18,7 @@ static int on_sys_message(void *context, char *topic, int topic_len, MQTTClient_
     (void)context; (void)topic_len;
 
     if (g_fp == NULL) {
-        MQTTClient_freeMessage(&msg);
+        MQTTClient_freeMessage(&msg); 
         MQTTClient_free(topic);
         return 1;
     }
@@ -29,7 +29,6 @@ static int on_sys_message(void *context, char *topic, int topic_len, MQTTClient_
     char value[SYS_VAL_MAX];
     int len = msg->payloadlen < (int)sizeof(value) - 1
             ? msg->payloadlen : (int)sizeof(value) - 1;
-
     memcpy(value, msg->payload, len);
     value[len] = '\0';
 
@@ -64,7 +63,7 @@ int sys_mon_init(sys_mon_t *sm, const char *broker, const char *output_dir) {
         return -1;
     }
 
-    // Subscribe $SYS at QoS 0; stats are informational only
+    // subscribe $SYS at QoS 0; stats are informational only
     MQTTClient_subscribe(client, "$SYS/#", 0);
     printf("sys_mon: connected and subscribed to $SYS/#\n");
 
@@ -73,24 +72,23 @@ int sys_mon_init(sys_mon_t *sm, const char *broker, const char *output_dir) {
 }
 
 void sys_mon_start(sys_mon_t *sm, int pub_qos, int sub_qos, int delay_ms, int msg_size) {
-    // Close previous test file if open
+    // close previous test file if open
     if (g_fp != NULL) {
         fclose(g_fp);
         g_fp = NULL;
     }
 
-    sm->pub_qos  = pub_qos;
-    sm->sub_qos  = sub_qos;
+    sm->pub_qos = pub_qos;
+    sm->sub_qos = sub_qos;
     sm->delay_ms = delay_ms;
     sm->msg_size = msg_size;
 
-    // Build filename: sys_pq{n}_sq{n}_d{n}_s{n}_{iso}.tsv 
-    char iso[32];
-    timestamp_to_iso(get_timestamp_ms(), iso, sizeof(iso));
+    // sys_pq{n}_sq{n}_d{n}_s{n}.tsv 
+
     snprintf(sm->filepath, sizeof(sm->filepath),
-             "%s/sys_pq%d_sq%d_d%d_s%d_%s.tsv",
-             sm->output_dir,
-             pub_qos, sub_qos, delay_ms, msg_size, iso);
+        "%s/sys_pq%d_sq%d_d%d_s%d.tsv",
+        sm->output_dir, pub_qos, sub_qos, delay_ms, msg_size
+    );
 
     g_fp = fopen(sm->filepath, "w");
     if (g_fp == NULL) {

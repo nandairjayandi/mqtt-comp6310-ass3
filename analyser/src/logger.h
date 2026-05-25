@@ -14,6 +14,7 @@ typedef struct {
     long long   counter; // message sequence number from publisher (0, 1, 2, ...)
     long long   pub_timestamp; // Unix epoch ms when publisher sent the message
     long long   recv_timestamp; // Unix epoch ms when analyser mqtt callback fired
+    int         latency_ms; // recv - pub timestamp
     char        topic[LOGGER_TOPIC_MAX]; // mqtt topic string e.g. "counter/0/0/1000"
     int         msg_size; // declared payload x-string length (1, 1000, or 4000)
 } log_entry_t;

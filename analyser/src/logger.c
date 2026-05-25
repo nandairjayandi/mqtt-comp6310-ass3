@@ -9,24 +9,14 @@ extern long long get_timestamp_ms(void);
 extern void timestamp_to_iso(long long ms, char *buf, size_t buf_size);
 
 static void build_filepath(const logger_t *log, char *path, size_t path_size) {
-    char iso[32];
-    timestamp_to_iso(get_timestamp_ms(), iso, sizeof(iso));
-
-    // snprintf(path, path_size,
-    //          "%s/%lld_%s.tsv",
-    //          log->output_dir,
-    //          log->start_counter,
-    //          iso
-    // );
-
     snprintf(
-        path, path_size, "%s/pq%d_sq%d_d%d_s%d_%s.tsv",
+        path, path_size, 
+        "%s/pq%d_sq%d_d%d_s%d.tsv",
         log->output_dir,
         log->pub_qos, 
         log->sub_qos,
         log->delay_ms, 
-        log->msg_size,
-        iso
+        log->msg_size
     );
 }
 
@@ -36,23 +26,30 @@ static int dump(logger_t *log) {
     char path[LOGGER_DIR_MAX + 64];
     build_filepath(log, path, sizeof(path));
 
-    FILE *fp = fopen(path, "w");
+    FILE *fp = fopen(path, "a");
     if (fp == NULL) {
         fprintf(stderr, "logger: failed to open '%s': %s\n", path, strerror(errno));
         return -1;
     }
 
-    fprintf(fp, "counter\tpub_timestamp\trecv_timestamp\ttopic\tmsg_size\n");
+    fseek(fp, 0, SEEK_END);
+    if (ftell(fp) == 0) {
+        fprintf(fp, "counter\tpub_timestamp\trecv_timestamp\tlatency_ms\ttopic\tmsg_size\tpub_qos\tsub_qos\tdelay_ms\n");
+    }
 
     int write_error = 0;
     for (int i = 0; i < log->count; i++) {
         const log_entry_t *e = &log->buf[i];
-        int ret = fprintf(fp, "%lld\t%lld\t%lld\t%s\t%d\n",
+        int ret = fprintf(fp, "%lld\t%lld\t%lld\t%d\t%s\t%d\t%d\t%d\t%d\n",
             e->counter,
             e->pub_timestamp,
             e->recv_timestamp,
+            e->latency_ms,
             e->topic,
-            e->msg_size
+            e->msg_size,
+            log->pub_qos,
+            log->sub_qos,
+            log->delay_ms
         );
 
         if (ret < 0) {
@@ -68,7 +65,7 @@ static int dump(logger_t *log) {
 }
 
 void logger_set_test(logger_t *log, int pub_qos, int sub_qos, int delay_ms, int msg_size) {
-    // Flush any leftover data from the previous test before switching.
+    // flush any leftover data from the previous test before switching
     if (log->count > 0) dump(log);
  
     log->pub_qos = pub_qos;
@@ -96,6 +93,7 @@ int logger_write(logger_t *log, long long counter, long long pub_timestamp, long
     e->counter = counter;
     e->pub_timestamp = pub_timestamp;
     e->recv_timestamp = recv_timestamp;
+    e->latency_ms = (int)(recv_timestamp - pub_timestamp);
     strncpy(e->topic, topic, LOGGER_TOPIC_MAX - 1);
     e->topic[LOGGER_TOPIC_MAX - 1] = '\0';
     e->msg_size = msg_size;
