@@ -38,6 +38,7 @@ static sys_mon_t g_sys;
 static volatile int g_done = 0; // set when "done" received on request/go msg
 static MQTTClient g_client;
 static const char *g_broker;
+static volatile long long g_test_start_ts = 0;
 
 // Testing parameters
 static const int SUB_QOS_VALS[] = {0, 1, 2};
@@ -99,21 +100,37 @@ static int on_message(void *context, char *topic, int topic_len, MQTTClient_mess
             g_logger.pub_qos, g_logger.delay_ms, g_logger.msg_size
         );
 
+        // discards stale message from previous test
         if (strcmp(topic, expected) != 0) {
             MQTTClient_freeMessage(&msg);
             MQTTClient_free(topic);
-            return 1;  /* discard — stale message from previous test */
+            return 1; 
         }
 
         long long counter, pub_ts;
         if (parse_payload(payload, &counter, &pub_ts) == 0) {
+            /*
+             * Discard messages whose pub_timestamp predates when we
+             * sent "start". These are stale messages from the previous
+             * test still draining from the broker queue.
+             */
+            if (pub_ts < g_test_start_ts - PARAM_SETTLE_MS) {
+                MQTTClient_freeMessage(&msg);
+                MQTTClient_free(topic);
+                return 1;
+            }
+
             int msg_size = parse_msg_size_from_topic(topic);
             logger_write(&g_logger, counter, pub_ts, recv_ts, topic, msg_size);
         }
 
-    } else if (strcmp(topic, "request/go") == 0) {
-        if (strcmp(payload, "done") == 0) { g_done = 1; }
-    }
+        } else if (strcmp(topic, "request/go") == 0) {
+            if (strcmp(payload, "done") == 0) {
+                if (recv_ts > g_test_start_ts) {
+                    g_done = 1;
+                }
+            }
+        }
 
     MQTTClient_freeMessage(&msg);
     MQTTClient_free(topic);
@@ -168,6 +185,7 @@ static void run_test(int test_num, int pub_qos, int sub_qos, int delay_ms, int m
     usleep(PARAM_SETTLE_MS * 1000);
  
     MQTTClient_publish(g_client, "request/go", (int)strlen("start"), "start", 1, 0, NULL);
+    g_test_start_ts = get_timestamp_ms();  // record when the test start, prevents race condition that cause premature timeout
     printf("analyser: 'start' sent. Running %ds..\n", TEST_DURATION_S);
  
     // Wait for "done" with hard timeout
@@ -208,8 +226,27 @@ int main(int argc, char *argv[]) {
         return 1; 
     }
 
+    char *influx_url = getenv("INFLUXDB_URL");
+    if (influx_url) {
+        char *token = getenv("INFLUXDB_TOKEN");
+        char *org = getenv("INFLUXDB_ORG");
+        char *bucket = getenv("INFLUXDB_BUCKET");
+        
+        if (token && org && bucket) {
+            if (logger_init_influx(&g_logger, influx_url, token, org, bucket) == 0) {
+                printf("analyser: InfluxDB logging enabled\n");
+            } else {
+                fprintf(stderr, "analyser: failed to init InfluxDB\n");
+            }
+        } else {
+            printf("analyser: InfluxDB URL set but missing token/org/bucket, skipping\n");
+        }
+    } else {
+        printf("analyser: InfluxDB not configured (set INFLUXDB_URL to enable)\n");
+    }
+
     // Create and connect MQTT client 
-    MQTTClient_connectOptions conn_opts = MQTTClient_connectOptions_initializer;
+    // MQTTClient_connectOptions conn_opts = MQTTClient_connectOptions_initializer;
     MQTTClient_create(&g_client, g_broker, CLIENT_ID, MQTTCLIENT_PERSISTENCE_NONE, NULL);
     MQTTClient_setCallbacks(g_client, NULL, NULL, on_message, NULL);
 
