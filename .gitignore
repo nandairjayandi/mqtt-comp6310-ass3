@@ -1,0 +1,11 @@
+out/
+
+monitoring/grafana/csv
+monitoring/grafana/pdf
+monitoring/grafana/plugins
+monitoring/grafana/png
+monitoring/grafana/unified-search
+
+monitoring/influxdb
+
+.DS_Store
