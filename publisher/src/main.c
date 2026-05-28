@@ -3,6 +3,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
+#include <sys/stat.h>
+#include <errno.h>
 
 #include <MQTTClient.h>
 
@@ -26,20 +28,21 @@
  *
  */
 
-#define DURATION_S   30
-#define CLIENT_ID    "publisher-01"
+#define TEST_DURATION_S 30
+#define CLIENT_ID "publisher-01"
 #define MQTT_TIMEOUT 10000L
-#define SUB_QOS      0   /* QoS for request/# subscription */
+#define SUB_QOS 0  
 
 /*
  * Config received from analyser via request/# topics.
  * Volatile because they are written by the MQTT callback thread
  * and read by the main thread.
  */
-static volatile int cfg_qos      = 0;
+static volatile int cfg_qos = 0;
 static volatile int cfg_delay_ms = 100;
 static volatile int cfg_msg_size = 1;
-static volatile int g_start      = 0;  /* set when "start" arrives */
+static volatile int g_start = 0;
+static volatile int g_abort = 0;
 
 static MQTTClient g_client;
 
@@ -47,66 +50,43 @@ static MQTTClient g_client;
  * Opens a new TSV file to record sent messages for this burst.
  * Filename: logs/<start_counter>_<iso_timestamp>.tsv
  *
- * The file stays open for the duration of the burst — one fwrite per
- * published message. Closed and flushed when the burst ends.
+ * The file stays open for the duration of the burst and one fwrite per published message. 
+ * Close and flush when the burst ends.
  *
  * Returns FILE* on success, NULL on failure.
  */
-// static FILE *open_sent_tsv(long long start_counter) {
-//     if (system("mkdir -p logs") != 0) {
-//         fprintf(stderr, "publisher: could not create logs directory\n");
-//         return NULL;
-//     }
-
-//     char iso[32];
-//     timestamp_to_iso(get_timestamp_ms(), iso, sizeof(iso));
-
-//     char path[256];
-//     snprintf(path, sizeof(path), "logs/%lld_%s.tsv", start_counter, iso);
-
-//     FILE *fp = fopen(path, "w");
-//     if (fp == NULL) {
-//         fprintf(stderr, "publisher: failed to open TSV '%s'\n", path);
-//         return NULL;
-//     }
-
-//     /* Header row */
-//     fprintf(fp, "counter\tpub_timestamp\ttopic\tmsg_size\n");
-//     return fp;
-// }
-
 static FILE *open_sent_tsv(int qos, int delay_ms, int msg_size) {
-    if (system("mkdir -p logs") != 0) {
-        fprintf(stderr, "publisher: could not create logs/\n");
+    const char *base_dir = "/out/publisher";
+    if (mkdir(base_dir, 0755) != 0 && errno != EEXIST) {
+        fprintf(stderr, "publisher: could not create %s\n", base_dir);
         return NULL;
     }
  
-    char iso[32];
-    timestamp_to_iso(get_timestamp_ms(), iso, sizeof(iso));
- 
     char path[256];
     snprintf(path, sizeof(path), 
-        "logs/pq%d_d%d_s%d_%s.tsv",
-        qos, delay_ms, msg_size, iso
+        "%s/pq%d_d%d_s%d.tsv", 
+        base_dir, qos, delay_ms, msg_size
     );
  
-    FILE *fp = fopen(path, "w");
+    FILE *fp = fopen(path, "a");
     if (fp == NULL) {
         fprintf(stderr, "publisher: failed to open TSV '%s'\n", path);
         return NULL;
     }
  
-    // tsv header
-    fprintf(fp, "counter\tpub_timestamp\ttopic\tmsg_size\n");
+    fseek(fp, 0, SEEK_END);
+    if (ftell(fp) == 0) {
+        fprintf(fp, "counter\tpub_timestamp\ttopic\tmsg_size\tmqtt_success\n");
+    }
 
-    printf("publisher: logging sent messages to %s\n", path);
+    fprintf(stderr, "publisher: logging sent messages to %s\n", path);
     return fp;
 }
  
 
 
 /*
- * Publishes messages at the configured rate for DURATION_S seconds.
+ * Publishes messages at the configured rate for TEST_DURATION_S seconds.
  *
  * For each message:
  *   1. Get timestamp
@@ -132,7 +112,7 @@ static void run_burst(void) {
         qos, delay_ms, msg_size
     );
 
-    // Build x-string suffix once — reused for every message 
+    // Build x-string tail
     char *x_str = NULL;
     if (msg_size > 0) {
         x_str = malloc(msg_size + 1);
@@ -158,30 +138,36 @@ static void run_burst(void) {
         free(x_str); free(payload); return;
     }
 
-    long long counter  = 0;
-    time_t end_time = time(NULL) + DURATION_S;
+    long long counter = 0;
+    time_t end_time = time(NULL) + TEST_DURATION_S;
 
-    printf("publisher: burst start. topic=%s qos=%d delay=%dms size=%d\n",
+    fprintf(stderr, "publisher: burst start. topic=%s qos=%d delay=%dms size=%d\n",
         topic, qos, delay_ms, msg_size
     );
 
     while (time(NULL) < end_time) {
+        if (g_abort) {
+            fprintf(stderr, "publisher: burst aborted by reset\n");
+            g_abort = 0;
+            break;
+        }
+        
+
         long long pub_ts = get_timestamp_ms();
+        long long curr_count = counter; counter++;
 
         int payload_len;
         if (msg_size > 0) {
-            payload_len = snprintf(payload, payload_buf_size, "%lld:%lld:%s", counter, pub_ts, x_str);
+            payload_len = snprintf(payload, payload_buf_size, "%lld:%lld:%s", curr_count, pub_ts, x_str);
         } else {
-            payload_len = snprintf(payload, payload_buf_size, "%lld:%lld:", counter, pub_ts);
+            payload_len = snprintf(payload, payload_buf_size, "%lld:%lld:", curr_count, pub_ts);
         }
 
         int rc = MQTTClient_publish(g_client, topic, payload_len, payload, qos, 0, NULL);
-        if (rc == MQTTCLIENT_SUCCESS) {
-            // Write to TSV only on successful publish as ground truth. A skipped counter here means the broker rejected the message, not a network loss.
-            fprintf(tsv, "%lld\t%lld\t%s\t%d\n", counter, pub_ts, topic, msg_size);
-            counter++;
-        } else {
-            fprintf(stderr, "publisher: publish failed (rc=%d). skipping counter %lld\n", rc, counter);
+        fprintf(tsv, "%lld\t%lld\t%s\t%d\t%d\n", curr_count, pub_ts, topic, msg_size, rc);
+
+        if (rc != MQTTCLIENT_SUCCESS) {
+            fprintf(stderr, "publisher: publish failed (rc=%d) for counter %lld\n", rc, curr_count);
         }
 
         if (delay_ms > 0) {
@@ -192,7 +178,7 @@ static void run_burst(void) {
     fflush(tsv); fclose(tsv); 
     free(x_str); free(payload);
 
-    printf("publisher: burst done. Sent %lld messages\n", counter);
+    fprintf(stderr, "publisher: burst done. Sent %lld messages\n", counter);
 }
 
 /*
@@ -212,19 +198,26 @@ static int on_message(void *context, char *topic, int topic_len, MQTTClient_mess
     payload[len] = '\0';
 
     if (strcmp(topic, "request/qos") == 0) {
-        cfg_qos = atoi(payload); printf("publisher: config qos=%d\n", cfg_qos);
+        cfg_qos = atoi(payload); fprintf(stderr, "publisher: config qos=%d\n", cfg_qos);
 
     } else if (strcmp(topic, "request/delay") == 0) {
-        cfg_delay_ms = atoi(payload); printf("publisher: config delay=%dms\n", cfg_delay_ms);
+        cfg_delay_ms = atoi(payload); fprintf(stderr, "publisher: config delay=%dms\n", cfg_delay_ms);
 
     } else if (strcmp(topic, "request/messagesize") == 0) {
-        cfg_msg_size = atoi(payload); printf("publisher: config msg_size=%d\n", cfg_msg_size);
+        cfg_msg_size = atoi(payload); fprintf(stderr, "publisher: config msg_size=%d\n", cfg_msg_size);
 
     } else if (strcmp(topic, "request/go") == 0) {
         if (strcmp(payload, "start") == 0) {
             g_start = 1;
         }
-        // Ignore "done". That's the analyser's own signal back to itself 
+  
+        else if (strcmp(payload, "reset") == 0) {
+        // Analyser gave up. abort current burst if running
+        // Since run_burst() checks time(NULL) < end_time, set end_time to the past by flagging an abort
+        g_abort = 1;
+        fprintf(stderr, "publisher: reset received. Aborting burst\n");
+        // Ignores "done". That's the analyser's own signal back to itself 
+        }
     }
 
     MQTTClient_freeMessage(&msg); MQTTClient_free(topic);
@@ -240,38 +233,34 @@ int main(int argc, char *argv[]) {
     const char *broker = argv[1];
 
     MQTTClient_connectOptions conn_opts = MQTTClient_connectOptions_initializer;
+    conn_opts.keepAliveInterval = 20; 
+    conn_opts.cleansession = 1;
 
     MQTTClient_create(&g_client, argv[1], CLIENT_ID, MQTTCLIENT_PERSISTENCE_NONE, NULL);
     MQTTClient_setCallbacks(g_client, NULL, NULL, on_message, NULL);
-
-    conn_opts.keepAliveInterval = 20; conn_opts.cleansession = 1;
 
     int rc = MQTTClient_connect(g_client, &conn_opts);
     if (rc != MQTTCLIENT_SUCCESS) {
         fprintf(stderr, "publisher: failed to connect to %s (rc=%d)\n", broker, rc);
         return 1;
     }
-    printf("publisher: connected to %s\n", broker);
+    fprintf(stderr, "publisher: connected to %s\n", broker);
 
     MQTTClient_subscribe(g_client, "request/#", SUB_QOS);
-    printf("publisher: subscribed to request/#.waiting for instructions\n");
+    fprintf(stderr, "publisher: subscribed to request/#.waiting for instructions\n");
 
-    /*
-     * Main event loop. 
-     * Poll g_start every 10ms. When set, run a burst, then notify the analyser with "done" and reset for the next run.
-     */
     while (1) {
         if (g_start) {
             g_start = 0;
             run_burst();
             MQTTClient_publish(g_client, "request/go", (int)strlen("done"), "done", 1, 0, NULL);
-            printf("publisher: sent 'done' to request/go\n");
-            printf("publisher: ready for next run\n");
+            fprintf(stderr, "publisher: sent 'done' to request/go\n");
+            fprintf(stderr, "publisher: ready for next run\n");
         }
         usleep(10000);  // 10ms poll. Low CPU pressure, fast enough response
     }
 
-    // when unreachable publisher runs until killed 
+    // run publisher until properly killed
     MQTTClient_disconnect(g_client, MQTT_TIMEOUT);
     MQTTClient_destroy(&g_client);
     return 0;
