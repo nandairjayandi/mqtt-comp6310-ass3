@@ -1,0 +1,381 @@
+{
+  "title": "MQTT Latency & Throughput Dashboard",
+  "uid": "mqtt-latency-dashboard-01",
+  "tags": ["mqtt", "latency", "iot"],
+  "timezone": "browser",
+  "schemaVersion": 36,
+  "version": 1,
+  "refresh": "5s",
+  "time": {
+    "from": "now-5m",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "title": "Overall Avg Latency (Last 1m)",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "query": "from(bucket: \"mqtt_data\")\n  |> range(start: -1m)\n  |> filter(fn: (r) => r._measurement == \"mqtt_latency\")\n  |> filter(fn: (r) => r._field == \"latency_ms\")\n  |> mean()",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influxdb-mqtt"
+          },
+          "format": "table"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["mean"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 50
+              },
+              {
+                "color": "red",
+                "value": 100
+              }
+            ]
+          },
+          "decimals": 2
+        }
+      }
+    },
+    {
+      "title": "Overall Msg Rate (msgs/sec)",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      },
+      "targets": [
+        {
+          "query": "from(bucket: \"mqtt_data\")\n  |> range(start: -1m)\n  |> filter(fn: (r) => r._measurement == \"mqtt_latency\")\n  |> filter(fn: (r) => r._field == \"msg_count\")\n  |> sum()\n  |> map(fn: (r) => ({ r with _value: float(v: r._value) / 60.0 }))",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influxdb-mqtt"
+          },
+          "format": "table"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["mean"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cps",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 10
+              },
+              {
+                "color": "green",
+                "value": 50
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "Total Messages (Time Range)",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 0
+      },
+      "targets": [
+        {
+          "query": "from(bucket: \"mqtt_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"mqtt_latency\")\n  |> filter(fn: (r) => r._field == \"msg_count\")\n  |> sum()",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influxdb-mqtt"
+          },
+          "format": "table"
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["mean"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0
+        }
+      }
+    },
+    {
+      "title": "⏱️ Latency by Test Configuration",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "targets": [
+        {
+          "query": "from(bucket: \"mqtt_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"mqtt_latency\")\n  |> filter(fn: (r) => r._field == \"latency_ms\")\n  |> aggregateWindow(every: 1s, fn: mean, createEmpty: false)\n  |> group(columns: [\"pub_qos\", \"sub_qos\", \"delay_ms\", \"msg_size\"])",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influxdb-mqtt"
+          },
+          "legendFormat": "PQ{{pub_qos}} SQ{{sub_qos}} D{{delay_ms}}ms S{{msg_size}}b"
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": ["mean", "max", "min"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "sortBy": "Mean",
+          "sortDesc": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "pointSize": 2,
+            "showPoints": "never"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 50
+              },
+              {
+                "color": "red",
+                "value": 100
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "📈 Message Throughput by Test Configuration",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
+      "targets": [
+        {
+          "query": "from(bucket: \"mqtt_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"mqtt_latency\")\n  |> filter(fn: (r) => r._field == \"msg_count\")\n  |> aggregateWindow(every: 1s, fn: sum, createEmpty: false)\n  |> group(columns: [\"pub_qos\", \"sub_qos\", \"delay_ms\", \"msg_size\"])",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influxdb-mqtt"
+          },
+          "legendFormat": "PQ{{pub_qos}} SQ{{sub_qos}} D{{delay_ms}}ms S{{msg_size}}b"
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": ["mean", "max"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "sortBy": "Mean",
+          "sortDesc": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cps",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 20,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        }
+      }
+    },
+    {
+      "title": "Latency Heatmap (All Configs)",
+      "type": "heatmap",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
+      "targets": [
+        {
+          "query": "from(bucket: \"mqtt_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"mqtt_latency\")\n  |> filter(fn: (r) => r._field == \"latency_ms\")\n  |> aggregateWindow(every: 1s, fn: mean, createEmpty: false)",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influxdb-mqtt"
+          },
+          "format": "table"
+        }
+      ],
+      "options": {
+        "calculate": true,
+        "calculation": {
+          "mode": "mean"
+        },
+        "cellGap": 2,
+        "color": {
+          "mode": "scheme",
+          "scheme": "Oranges"
+        },
+        "legend": {
+          "show": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "showHistogram": true
+        },
+        "yAxis": {
+          "axisPlacement": "left",
+          "reverse": false,
+          "unit": "ms"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        }
+      }
+    },
+    {
+      "title": "📊 Avg Latency by Message Size",
+      "type": "barchart",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
+      "targets": [
+        {
+          "query": "from(bucket: \"mqtt_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"mqtt_latency\")\n  |> filter(fn: (r) => r._field == \"latency_ms\")\n  |> group(columns: [\"msg_size\"])\n  |> mean()\n  |> sort(columns: [\"_value\"], desc: false)",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influxdb-mqtt"
+          },
+          "format": "table"
+        }
+      ],
+      "options": {
+        "orientation": "vertical",
+        "xField": "msg_size",
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 80
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 50
+              },
+              {
+                "color": "red",
+                "value": 100
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "timepicker": {
+    "refresh_intervals": ["5s", "10s", "30s", "1m", "5m"],
+    "time_options": ["5m", "15m", "1h", "6h", "12h", "24h"]
+  }
+}
