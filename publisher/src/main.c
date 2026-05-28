@@ -208,7 +208,7 @@ static int on_message(void *context, char *topic, int topic_len, MQTTClient_mess
 
     } else if (strcmp(topic, "request/go") == 0) {
         if (strcmp(payload, "start") == 0) {
-            g_about = 0;
+            g_abort = 0;
             g_start = 1;
         }
   
