@@ -7,6 +7,7 @@
 
 #include "logger.h"
 #include "sys_mon.h"
+#include "stats.h"
 #include "../../shared/src/utils.h"
 
 /*
@@ -39,6 +40,7 @@ static volatile int g_done = 0; // set when "done" received on request/go msg
 static MQTTClient g_client;
 static const char *g_broker;
 static volatile long long g_test_start_ts = 0;
+static volatile long long g_test_end_ts = 0;
 
 // Testing parameters
 static const int SUB_QOS_VALS[] = {0, 1, 2};
@@ -125,6 +127,9 @@ static int on_message(void *context, char *topic, int topic_len, MQTTClient_mess
         }
 
         } else if (strcmp(topic, "request/go") == 0) {
+            fprintf(stderr, "[DEBUG] on_message: request/go payload='%s' recv_ts=%lld start_ts=%lld\n",
+                payload, recv_ts, g_test_start_ts
+            );
             if (strcmp(payload, "done") == 0) {
                 if (recv_ts > g_test_start_ts) {
                     g_done = 1;
@@ -152,12 +157,12 @@ static int connect_and_subscribe(int sub_qos) {
  
     MQTTClient_subscribe(g_client, "counter/#", sub_qos);
     MQTTClient_subscribe(g_client, "request/go", sub_qos);
-    printf("analyser: connected, (re)subscribed at sub_qos=%d\n", sub_qos);
+    fprintf(stderr, "analyser: connected, (re)subscribed at sub_qos=%d\n", sub_qos);
     return 0;
 }
 
 static void run_test(int test_num, int pub_qos, int sub_qos, int delay_ms, int msg_size) {
-    printf("\n[%d/%d] pq=%d sq=%d delay=%dms size=%d\n",
+    fprintf(stderr, "\n[%d/%d] pq=%d sq=%d delay=%dms size=%d\n",
         test_num, N_TESTS, pub_qos, sub_qos, delay_ms, msg_size
     );
  
@@ -186,7 +191,7 @@ static void run_test(int test_num, int pub_qos, int sub_qos, int delay_ms, int m
  
     MQTTClient_publish(g_client, "request/go", (int)strlen("start"), "start", 1, 0, NULL);
     g_test_start_ts = get_timestamp_ms();  // record when the test start, prevents race condition that cause premature timeout
-    printf("analyser: 'start' sent. Running %ds..\n", TEST_DURATION_S);
+    fprintf(stderr, "analyser: 'start' sent. Running %ds..\n", TEST_DURATION_S);
  
     // Wait for "done" with hard timeout
     int waited = 0;
@@ -196,16 +201,21 @@ static void run_test(int test_num, int pub_qos, int sub_qos, int delay_ms, int m
         waited++;
     }
  
+    g_test_end_ts = get_timestamp_ms(); 
+
     if (g_done) {
-        printf("analyser: 'done' received after %ds\n", waited);
+        fprintf(stderr, "analyser: 'done' received after %ds\n", waited);
     } else {
-        printf("analyser: timeout after %ds. Flushing anyway\n", waited);
+        fprintf(stderr, "analyser: timeout after %ds. Flushing anyway\n", waited);
+        MQTTClient_publish(g_client, "request/go", (int)strlen("reset"), "reset", 1, 0, NULL);
+        sleep(2);
     }
+
+    write_ts_meta(&g_logger, g_test_start_ts, g_test_end_ts);
  
     logger_flush(&g_logger);
     sys_mon_stop(&g_sys);
 }
-
 
 int main(int argc, char *argv[]) {
     if (argc < 2) {
@@ -215,13 +225,17 @@ int main(int argc, char *argv[]) {
     }
     g_broker = argv[1];
 
+    long long test_start_ts = get_timestamp_ms();
+    char start_time_str[32];
+    timestamp_to_iso(test_start_ts, start_time_str, sizeof(start_time_str));
+
     // Init logger. TSV files written to ./logs/ 
-    if (logger_init(&g_logger, "logs") != 0) {
+    if (logger_init(&g_logger, "/out/analyser") != 0) {
         fprintf(stderr, "analyser: failed to init logger\n");
         return 1;
     }
 
-    if (sys_mon_init(&g_sys, g_broker, "logs/sys") != 0) { 
+    if (sys_mon_init(&g_sys, g_broker, "/out/analyser/sys") != 0) { 
         fprintf(stderr, "analyser: failed to init sys_mon\n");
         return 1; 
     }
@@ -234,15 +248,15 @@ int main(int argc, char *argv[]) {
         
         if (token && org && bucket) {
             if (logger_init_influx(&g_logger, influx_url, token, org, bucket) == 0) {
-                printf("analyser: InfluxDB logging enabled\n");
+                fprintf(stderr, "analyser: InfluxDB logging enabled\n");
             } else {
                 fprintf(stderr, "analyser: failed to init InfluxDB\n");
             }
         } else {
-            printf("analyser: InfluxDB URL set but missing token/org/bucket, skipping\n");
+            fprintf(stderr, "analyser: InfluxDB URL set but missing token/org/bucket, skipping\n");
         }
     } else {
-        printf("analyser: InfluxDB not configured (set INFLUXDB_URL to enable)\n");
+        fprintf(stderr, "analyser: InfluxDB not configured (set INFLUXDB_URL to enable)\n");
     }
 
     // Create and connect MQTT client 
@@ -250,7 +264,8 @@ int main(int argc, char *argv[]) {
     MQTTClient_create(&g_client, g_broker, CLIENT_ID, MQTTCLIENT_PERSISTENCE_NONE, NULL);
     MQTTClient_setCallbacks(g_client, NULL, NULL, on_message, NULL);
 
-    printf("analyser: starting %d-test suite against %s\n", N_TESTS, g_broker);
+    fprintf(stderr, "analyser: starting %d-test suite against %s\n", N_TESTS, g_broker);
+    fprintf(stderr, "analyser: test started at: %s\n", start_time_str);
  
     int test_num = 1;
     int first_connection = 1;
@@ -260,8 +275,7 @@ int main(int argc, char *argv[]) {
  
         if (!first_connection) {
             MQTTClient_disconnect(g_client, MQTT_TIMEOUT);
-            printf("analyser: disconnected — reconnecting at sub_qos=%d\n",
-                   sub_qos);
+            fprintf(stderr, "analyser: disconnected. reconnecting at sub_qos=%d\n", sub_qos);
         }
         first_connection = 0;
  
@@ -285,7 +299,19 @@ int main(int argc, char *argv[]) {
     MQTTClient_disconnect(g_client, MQTT_TIMEOUT);
     MQTTClient_destroy(&g_client);
     sys_mon_destroy(&g_sys);
+
+    long long test_end_ts = get_timestamp_ms(); 
+    char end_time_str[32]; timestamp_to_iso(test_end_ts, end_time_str, sizeof(end_time_str));
+    char duration_str[32]; format_duration(test_end_ts - test_start_ts, duration_str, sizeof(duration_str));
  
-    printf("\nanalyser: all %d tests complete. Results in logs/\n", N_TESTS);
-    return 0;
+    fprintf(stderr, "analyser: all %d tests complete. Results in logs/\n", N_TESTS);
+    fprintf(stderr, "analyser: test completed at: %s\n", end_time_str);
+    fprintf(stderr, "analyser: total duration to complete %s (hh:mm:ss)\n", duration_str);
+    
+    // start analysis
+    // note the following assumes that publisher file exists in out/publisher
+    // need to setup script that downloads from remote container e.g. aws
+
+    // fprintf(stderr, "analyser: starting post run report creation");
+    // calculate_all_statistics();
 }
