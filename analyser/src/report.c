@@ -23,7 +23,7 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "Found %d test runs\n", n_tests);
     
     // Process each test with its own timestamp window
-    build_stats_csv_header();
+    build_stats_tsv_header();
     
     for (int i = 0; i < n_tests; i++) {
         test_stats_t stats;
@@ -70,7 +70,7 @@ int main(int argc, char *argv[]) {
         fclose(check);
         
         if (calc_test_stats(&stats) == 0) {
-            build_stats_csv_row(&stats);
+            build_stats_tsv_row(&stats);
         } else {
             fprintf(stderr, "report: failed to analyse pq=%d sq=%d d=%d s=%d\n",
                     stats.pub_qos, 

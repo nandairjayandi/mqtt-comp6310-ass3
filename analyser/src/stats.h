@@ -27,7 +27,7 @@
 typedef struct {
     long long counter;
     long long pub_ts;
-    long long recv_ts;   /* analyser only; 0 for publisher rows */
+    long long recv_ts;   // analyser only; 0 for publisher rows 
 } row_pair_t;
 
 /*
@@ -57,16 +57,16 @@ typedef struct {
     double loss_perc;
 
     long long out_of_order_count;
-    double    out_of_order_perc;
+    double out_of_order_perc;
 
     long long dup_count;
-    double    dup_perc;
+    double dup_perc;
 
-    double    mean_rate_msgs_per_sec;
+    double mean_rate_msgs_per_sec;
 
     // recv_ts differences between messages
-    double    mean_gap_ms;
-    double    stddev_gap_ms;
+    double mean_gap_ms;
+    double stddev_gap_ms;
     long long gap_sample_count;
 } test_stats_t;
 
@@ -94,9 +94,8 @@ int correlate_with_sys(const test_stats_t *stats);
 
 /* Output helpers */
 void print_test_stats(const test_stats_t *stats);
-void build_stats_csv_header(void);
-void build_stats_csv_row(const test_stats_t *stats);
-
+void build_stats_tsv_header(void);
+void build_stats_tsv_row(const test_stats_t *stats);
 int read_test_metadata(const char *analyser_dir, test_metadata_t **tests_out);
 
 #endif /* STATS_H */
