@@ -34,6 +34,8 @@ typedef struct {
     int         sub_qos;
     int         delay_ms;
     int         msg_size;
+    
+    int         test_success; 
 
     // for influxdb monitoring
     CURL        *curl;
