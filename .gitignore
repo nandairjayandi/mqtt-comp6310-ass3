@@ -9,3 +9,5 @@ monitoring/grafana/unified-search
 monitoring/influxdb
 
 .DS_Store
+
+backup*.zip
