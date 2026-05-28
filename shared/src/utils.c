@@ -27,3 +27,12 @@ void timestamp_to_iso(long long ms, char *buf, size_t buf_size) {
         millis
     );
 }
+
+void format_duration(long long ms, char *buf, size_t buf_size) {
+    long long sum_secs = ms / 1000;
+    int hours = (int)(sum_secs / 3600);
+    int mins = (int)((sum_secs % 3600) / 60);
+    int secs = (int)(sum_secs % 60);
+    
+    snprintf(buf, buf_size, "%02d:%02d:%02d", hours, mins, secs);
+}

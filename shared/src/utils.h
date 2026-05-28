@@ -6,5 +6,6 @@
 long long get_timestamp_ms(void);
 
 void timestamp_to_iso(long long ms, char *buf, size_t buf_size);
+void format_duration(long long ms, char *buf, size_t buf_size);
 
 #endif
