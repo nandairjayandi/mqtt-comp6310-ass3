@@ -11,10 +11,10 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 COPY analyser/src/ ./src/
-COPY shared/ ./shared/
+COPY shared/ ../shared/
 COPY analyser/Makefile .
 
-RUN make
+RUN make analyser && make report
 
 FROM debian:bookworm-slim
 
@@ -25,5 +25,6 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 COPY --from=builder /app/analyser .
+COPY --from=builder /app/report .
 
 CMD ["./analyser"]
