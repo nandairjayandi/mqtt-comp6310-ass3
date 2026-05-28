@@ -26,7 +26,7 @@
  */
 
 #define TEST_DURATION_S 30
-#define TIMEOUT_GRACE_S 10 // How many seconds to wait beyond test duration before giving up
+#define TIMEOUT_GRACE_S 30 // How many seconds to wait beyond test duration before giving up
 #define PARAM_SETTLE_MS 500 // How many ms to wait after publishing params before "start"
 #define INTER_TEST_SLEEP_S 2 // Seconds pause between tests to let broker settle
 
