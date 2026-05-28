@@ -20,10 +20,18 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "report: no test metadata found in %s/test_timestamps.tsv\n", analyser_dir);
         return 1;
     }
-    fprintf(stderr, "Found %d test runs\n", n_tests);
+    fprintf(stderr, "report: found %d test runs\n", n_tests);
     
+    FILE *report_fp = fopen("out/report", "w");
+    if (!report_fp) {
+        fprintf(stderr, "report: Failed to open out/report for writing\n");
+        return 1;
+    }
+
+    build_stats_tsv_header(report_fp);
+
     // Process each test with its own timestamp window
-    build_stats_tsv_header();
+    build_stats_tsv_header(report_fp);
     
     for (int i = 0; i < n_tests; i++) {
         test_stats_t stats;
@@ -70,7 +78,7 @@ int main(int argc, char *argv[]) {
         fclose(check);
         
         if (calc_test_stats(&stats) == 0) {
-            build_stats_tsv_row(&stats);
+            build_stats_tsv_row(report_fp, &stats);
         } else {
             fprintf(stderr, "report: failed to analyse pq=%d sq=%d d=%d s=%d\n",
                     stats.pub_qos, 
@@ -80,6 +88,7 @@ int main(int argc, char *argv[]) {
             );
         }
     }
+
     
     free(tests);
     return 0;

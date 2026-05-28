@@ -94,8 +94,8 @@ int correlate_with_sys(const test_stats_t *stats);
 
 /* Output helpers */
 void print_test_stats(const test_stats_t *stats);
-void build_stats_tsv_header(void);
-void build_stats_tsv_row(const test_stats_t *stats);
+void build_stats_tsv_header(FILE *fp);
+void build_stats_tsv_row(FILE *fp, const test_stats_t *stats);
 int read_test_metadata(const char *analyser_dir, test_metadata_t **tests_out);
 
 #endif /* STATS_H */

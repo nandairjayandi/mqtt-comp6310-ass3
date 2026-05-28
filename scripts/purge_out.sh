@@ -28,7 +28,7 @@ find "$LOCAL_PATH/publisher" -type f -delete 2>/dev/null
 find "$LOCAL_PATH/analyser" -type f -delete 2>/dev/null
 find "$LOCAL_PATH/analyser/sys" -type f -delete 2>/dev/null
 
-# find "./monitoring/influxdb/" -type f -delete 2>/dev/null
-# find "./monitoring/grafana/" -type f ! -path "*/provisioning/*" -delete 2>/dev/null
+find "./monitoring/influxdb/" -type f -delete 2>/dev/null
+find "./monitoring/grafana/" -type f ! -path "*/provisioning/*" -delete 2>/dev/null
 
 echo "All output data has been deleted."

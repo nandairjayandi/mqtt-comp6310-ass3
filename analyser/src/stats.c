@@ -463,33 +463,33 @@ void print_test_stats(const test_stats_t *stats) {
     printf("[REPORT] Stddev gap: %.3fms\n", stats->stddev_gap_ms);
 }
 
-void build_stats_tsv_header(void) {
-    printf("pub_qos\tsub_qos\tdelay_ms\tmsg_size\t"
-           "pub_attempts\tpub_successes\tpub_success_rate\t"
-           "expected\treceived\tlost\tloss_pct\t"
-           "out_of_order\tooo_pct\t"
-           "duplicates\tdup_pct\t"
-           "mean_rate_msg_per_s\t"
-           "mean_gap_ms\tstddev_gap_ms\tgap_samples\n"
+void build_stats_tsv_header(FILE *fp) {
+    fprintf(fp, "pub_qos\tsub_qos\tdelay_ms\tmsg_size\t"
+               "pub_attempts\tpub_successes\tpub_success_rate\t"
+               "expected\treceived\tlost\tloss_pct\t"
+               "out_of_order\tooo_pct\t"
+               "duplicates\tdup_pct\t"
+               "mean_rate_msg_per_s\t"
+               "mean_gap_ms\tstddev_gap_ms\tgap_samples\n"
     );
 }
 
-void build_stats_tsv_row(const test_stats_t *stats) {
-    printf("%d\t%d\t%d\t%d\t"
-           "%lld\t%lld\t%.2f\t"
-           "%lld\t%lld\t"
-           "%lld\t%.4f\t"
-           "%lld\t%.4f\t"
-           "%lld\t%.4f\t"
-           "%.2f\t"
-           "%.3f\t%.3f\t%lld\n",
-           stats->pub_qos, stats->sub_qos, stats->delay_ms, stats->msg_size,
-           stats->pub_attempts, stats->pub_success, stats->pub_success_rate,
-           stats->exp_msg, stats->actual_recv,
-           stats->loss_count, stats->loss_perc,
-           stats->out_of_order_count, stats->out_of_order_perc,
-           stats->dup_count, stats->dup_perc,
-           stats->mean_rate_msgs_per_sec,
-           stats->mean_gap_ms, stats->stddev_gap_ms, stats->gap_sample_count
-    );
+void build_stats_tsv_row(FILE *fp, const test_stats_t *stats) {
+    fprintf(fp, "%d\t%d\t%d\t%d\t"
+               "%lld\t%lld\t%.2f\t"
+               "%lld\t%lld\t"
+               "%lld\t%.4f\t"
+               "%lld\t%.4f\t"
+               "%lld\t%.4f\t"
+               "%.2f\t"
+               "%.3f\t%.3f\t%lld\n",
+               stats->pub_qos, stats->sub_qos, stats->delay_ms, stats->msg_size,
+               stats->pub_attempts, stats->pub_success, stats->pub_success_rate,
+               stats->exp_msg, stats->actual_recv,
+               stats->loss_count, stats->loss_perc,
+               stats->out_of_order_count, stats->out_of_order_perc,
+               stats->dup_count, stats->dup_perc,
+               stats->mean_rate_msgs_per_sec,
+               stats->mean_gap_ms, stats->stddev_gap_ms, stats->gap_sample_count
+            );
 }
