@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: broker/Dockerfile
+    volumes:
+      - ./out/broker:/var/lib/mosquitto
     ports:
       - "1883:1883"
       - "9001:9001"
@@ -13,7 +15,9 @@ services:
       dockerfile: publisher/Dockerfile
     command: ["./publisher", "tcp://broker:1883"]
     volumes:
-      - ./out/publisher:/app/logs
+      # - ./out/publisher:/app/logs
+      - ./out/publisher:/out/publisher
+      - ./out/analyser:/out/analyser:ro
     depends_on:
       - broker
 
@@ -23,47 +27,50 @@ services:
       dockerfile: analyser/Dockerfile
     command: ["./analyser", "tcp://broker:1883"]
     volumes:
-      - ./out/analyser:/app/logs
-    environment:
-      - INFLUXDB_URL=http://influxdb:8086
-      - INFLUXDB_TOKEN=comp6310ass3
-      - INFLUXDB_ORG=mqtt-ass3
-      - INFLUXDB_BUCKET=mqtt_data
+      # - ./out/analyser:/app/logs
+      - ./out/analyser:/out/analyser 
+      - ./out/publisher:/out/publisher:ro
+    # environment:
+    #   - INFLUXDB_URL=http://influxdb:8086
+    #   - INFLUXDB_TOKEN=comp6310ass3
+    #   - INFLUXDB_ORG=mqtt-ass3
+    #   - INFLUXDB_BUCKET=mqtt_data
+    #   - INFLUXDB_SAMPLE_RATE=100 
     depends_on:
       broker:
         condition: service_started
-      influxdb:
-        condition: service_healthy  # wait for influxdb to be ready
+      # influxdb:
+      #   condition: service_healthy  # wait for influxdb to be ready
 
-  influxdb:
-    image: influxdb:latest
-    ports:
-      - "8086:8086"
-    environment:
-      - DOCKER_INFLUXDB_INIT_MODE=setup
-      - DOCKER_INFLUXDB_INIT_USERNAME=admin
-      - DOCKER_INFLUXDB_INIT_PASSWORD=adminpass
-      - DOCKER_INFLUXDB_INIT_ORG=mqtt-ass3
-      - DOCKER_INFLUXDB_INIT_BUCKET=mqtt_data
-      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=comp6310ass3
-    volumes:
-      - ./monitoring/influxdb:/var/lib/influxdb2
-    healthcheck:
-      test: ["CMD", "influx", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  grafana:
-    image: grafana/grafana:latest
-    ports:
-      - "3000:3000"
-    environment:
-      - GF_AUTH_ANONYMOUS_ENABLED=true
-      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
-      - GF_INSTALL_PLUGINS=yesoreyeram-infinity-datasource
-    volumes:
-      - ./monitoring/grafana:/var/lib/grafana
-      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
-    depends_on:
-      - influxdb
+  # influxdb:
+  #   image: influxdb:latest
+  #   ports:
+  #     - "8086:8086"
+  #   environment:
+  #     - DOCKER_INFLUXDB_INIT_MODE=setup
+  #     - DOCKER_INFLUXDB_INIT_USERNAME=admin
+  #     - DOCKER_INFLUXDB_INIT_PASSWORD=adminpass
+  #     - DOCKER_INFLUXDB_INIT_ORG=mqtt-ass3
+  #     - DOCKER_INFLUXDB_INIT_BUCKET=mqtt_data
+  #     - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=comp6310ass3
+  #   volumes:
+  #     - ./monitoring/influxdb:/var/lib/influxdb2
+  #   healthcheck:
+  #     test: ["CMD", "influx", "ping"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  
+  # grafana:
+  #   image: grafana/grafana:latest
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     - GF_AUTH_ANONYMOUS_ENABLED=true
+  #     - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+  #     - GF_INSTALL_PLUGINS=yesoreyeram-infinity-datasource
+  #   volumes:
+  #     - ./monitoring/grafana:/var/lib/grafana
+  #     - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+  #   depends_on:
+  #     - influxdb
