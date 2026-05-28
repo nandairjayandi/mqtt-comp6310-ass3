@@ -29,6 +29,7 @@ services:
     volumes:
       # - ./out/analyser:/app/logs
       - ./out/analyser:/out/analyser 
+      - ./out/report:/out/report
       - ./out/publisher:/out/publisher:ro
     # environment:
     #   - INFLUXDB_URL=http://influxdb:8086
