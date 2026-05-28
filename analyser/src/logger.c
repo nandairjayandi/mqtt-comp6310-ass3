@@ -4,6 +4,9 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <errno.h>
+#include <stdlib.h>
+
+static unsigned long long g_message_counter = 0;
 
 extern long long get_timestamp_ms(void);
 extern void timestamp_to_iso(long long ms, char *buf, size_t buf_size);
@@ -34,19 +37,20 @@ static int dump(logger_t *log) {
 
     fseek(fp, 0, SEEK_END);
     if (ftell(fp) == 0) {
-        fprintf(fp, "counter\tpub_timestamp\trecv_timestamp\tlatency_ms\ttopic\tmsg_size\tpub_qos\tsub_qos\tdelay_ms\n");
+        fprintf(fp, "counter\tpub_timestamp\ttopic\tmsg_size\trecv_timestamp\tlatency_ms\tpub_qos\tsub_qos\tdelay_ms\n");
     }
 
     int write_error = 0;
     for (int i = 0; i < log->count; i++) {
         const log_entry_t *e = &log->buf[i];
-        int ret = fprintf(fp, "%lld\t%lld\t%lld\t%d\t%s\t%d\t%d\t%d\t%d\n",
+        int ret = fprintf(fp, "%lld\t%lld\t%s\t%d\t%lld\t%d\t%d\t%d\t%d\n",
             e->counter,
-            e->pub_timestamp,
-            e->recv_timestamp,
-            e->latency_ms,
+            e->pub_ts,
             e->topic,
             e->msg_size,
+            e->recv_ts,
+            e->latency_ms,
+        
             log->pub_qos,
             log->sub_qos,
             log->delay_ms
@@ -134,6 +138,7 @@ int logger_init(logger_t *log, const char *output_dir) {
     // Initialize curl to NULL (will be set by logger_init_influx if called)
     log->curl = NULL;
     log->influx_buffer_pos = 0;
+    log->influx_sample_rate = DEFAULT_SAMPLE_RATE;
 
     if (mkdir(output_dir, 0755) != 0 && errno != EEXIST) {
         fprintf(stderr, "logger: failed to create directory '%s': %s\n", output_dir, strerror(errno));
@@ -147,6 +152,21 @@ int logger_init_influx(logger_t *log, const char *url, const char *token,
     curl_global_init(CURL_GLOBAL_DEFAULT);
     log->curl = curl_easy_init();
     if (!log->curl) return -1;
+
+    log->influx_sample_rate = DEFAULT_SAMPLE_RATE;
+    const char *sample_rate_str = getenv("INFLUXDB_SAMPLE_RATE");
+    if (sample_rate_str) {
+        int rate = atoi(sample_rate_str);
+        if (rate > 0) {
+            log->influx_sample_rate = rate;
+            fprintf(stderr, "logger: Using custom sample rate: 1/%d\n", log->influx_sample_rate);
+        }
+    }
+
+    // Add timeouts to prevent hanging
+    curl_easy_setopt(log->curl, CURLOPT_TIMEOUT_MS, 100L);  // 100ms total timeout
+    curl_easy_setopt(log->curl, CURLOPT_CONNECTTIMEOUT_MS, 50L);  // 50ms connect
+    curl_easy_setopt(log->curl, CURLOPT_NOSIGNAL, 1L);  // Don't use signals
     
     strncpy(log->influx_url, url, sizeof(log->influx_url)-1);
     strncpy(log->influx_token, token, sizeof(log->influx_token)-1);
@@ -154,25 +174,30 @@ int logger_init_influx(logger_t *log, const char *url, const char *token,
     strncpy(log->influx_bucket, bucket, sizeof(log->influx_bucket)-1);
     log->influx_buffer_pos = 0;
     
-    printf("logger: InfluxDB initialized at %s\n", url);
+    fprintf(stderr, "logger: InfluxDB initialized at %s (sampling rate: 1/%d)\n", url, log->influx_sample_rate);
     return 0;
 }
 
-int logger_write(logger_t *log, long long counter, long long pub_timestamp, long long recv_timestamp, const char *topic, int msg_size) {
+int logger_write(logger_t *log, long long counter, long long pub_ts, long long recv_ts, const char *topic, int msg_size) {
     log_entry_t *e = &log->buf[log->count];
 
     e->counter = counter;
-    e->pub_timestamp = pub_timestamp;
-    e->recv_timestamp = recv_timestamp;
-    e->latency_ms = (int)(recv_timestamp - pub_timestamp);
+    e->pub_ts = pub_ts;
     strncpy(e->topic, topic, LOGGER_TOPIC_MAX - 1);
     e->topic[LOGGER_TOPIC_MAX - 1] = '\0';
     e->msg_size = msg_size;
 
+    e->recv_ts = recv_ts;
+    e->latency_ms = (int)(recv_ts - pub_ts);
+
     log->count++;
     
-    if (log->curl) {
-        influx_send_point(log, pub_timestamp, e->latency_ms);
+    // if (log->curl) {
+    //     influx_send_point(log, pub_timestamp, e->latency_ms);
+    // }
+
+    if (log->curl && (++g_message_counter % log->influx_sample_rate == 0)) {
+        influx_send_point(log, pub_ts, e->latency_ms);
     }
     
     // Flush TSV buffer when full
@@ -182,10 +207,43 @@ int logger_write(logger_t *log, long long counter, long long pub_timestamp, long
     return 0;
 }
 
+int write_ts_meta(const logger_t *log, long long start_ts, long long end_ts) {
+    char metadata_path[LOGGER_DIR_MAX + 32];
+    snprintf(metadata_path, sizeof(metadata_path), "%s/test_timestamps.tsv", log->output_dir);
+    
+    FILE *fp = fopen(metadata_path, "a");
+    if (fp == NULL) {
+        fprintf(stderr, "logger: failed to open metadata file '%s': %s\n", 
+                metadata_path, strerror(errno));
+        return -1;
+    }
+    
+    // Check if file is empty to write header
+    fseek(fp, 0, SEEK_END);
+    if (ftell(fp) == 0) {
+        fprintf(fp, "pub_qos\tsub_qos\tdelay_ms\tmsg_size\tstart_ts\tend_ts\n");
+    }
+    
+    fprintf(fp, 
+        "%d\t%d\t%d\t%d\t",
+        "%lld\t%lld\n",
+        log->pub_qos, log->sub_qos, log->delay_ms, log->msg_size,
+        start_ts, end_ts
+    );
+    
+    fclose(fp);
+    return 0;
+}
+
 int logger_flush(logger_t *log) {
     // Flush both TSV and InfluxDB
-    fprintf(stderr, "logger_flush: flushing influx buffer pos=%zu\n", 
-            log->influx_buffer_pos);
+    fprintf(stderr, "logger_flush: flushing influx buffer pos=%zu\n", log->influx_buffer_pos);
+    for (int i = 0; i < log->count; i++) {
+        if (++g_message_counter % log->influx_sample_rate == 0) {
+            log_entry_t *e = &log->buf[i];
+            influx_send_point(log, e->pub_ts, e->latency_ms);
+        }
+    }
     influx_flush(log);
     return dump(log);
 }
