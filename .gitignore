@@ -11,3 +11,5 @@ monitoring/influxdb
 .DS_Store
 
 backup*.zip
+
+.idea
