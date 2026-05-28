@@ -29,6 +29,7 @@
 #define TIMEOUT_GRACE_S 30 // How many seconds to wait beyond test duration before giving up
 #define PARAM_SETTLE_MS 500 // How many ms to wait after publishing params before "start"
 #define INTER_TEST_SLEEP_S 2 // Seconds pause between tests to let broker settle
+#define MAX_RETRY 100 //
 
 #define CLIENT_ID "analyser-01"
 #define MQTT_TIMEOUT 10000L
@@ -162,59 +163,101 @@ static int connect_and_subscribe(int sub_qos) {
 }
 
 static void run_test(int test_num, int pub_qos, int sub_qos, int delay_ms, int msg_size) {
-    fprintf(stderr, "\n[%d/%d] pq=%d sq=%d delay=%dms size=%d\n",
-        test_num, N_TESTS, pub_qos, sub_qos, delay_ms, msg_size
-    );
- 
-    g_done = 0;
- 
-    // Update logger and sys_monitor with test metadata
-    logger_set_test(&g_logger, pub_qos, sub_qos, delay_ms, msg_size);
-    sys_mon_start(&g_sys, pub_qos, sub_qos, delay_ms, msg_size);
- 
-    // Publish params to publisher
-    char qos_str[4], delay_str[8], size_str[8];
-    snprintf(qos_str, sizeof(qos_str), "%d", pub_qos);
-    snprintf(delay_str, sizeof(delay_str), "%d", delay_ms);
-    snprintf(size_str, sizeof(size_str), "%d", msg_size);
- 
-    MQTTClient_publish(g_client, "request/qos",
-                       (int)strlen(qos_str), qos_str, 1, 0, NULL);
-    MQTTClient_publish(g_client, "request/delay",
-                       (int)strlen(delay_str), delay_str, 1, 0, NULL);
-    MQTTClient_publish(g_client, "request/messagesize",
-                       (int)strlen(size_str), size_str, 1, 0, NULL);
- 
-    // Wait for publisher to receive all params before sending "start". On high-latency internet paths likely this should be increased
-    // prevents race condition 
-    usleep(PARAM_SETTLE_MS * 1000);
- 
-    MQTTClient_publish(g_client, "request/go", (int)strlen("start"), "start", 1, 0, NULL);
-    g_test_start_ts = get_timestamp_ms();  // record when the test start, prevents race condition that cause premature timeout
-    fprintf(stderr, "analyser: 'start' sent. Running %ds..\n", TEST_DURATION_S);
- 
-    // Wait for "done" with hard timeout
-    int waited = 0;
-    int limit  = TEST_DURATION_S + TIMEOUT_GRACE_S;
-    while (!g_done && waited < limit) {
-        sleep(1);
-        waited++;
+    for (int retry = 0; retry <= MAX_RETRY; retry++) {
+        if (retry > 0) {
+            fprintf(stderr, "\n[%d/%d] RETRY %d/%d: pq=%d sq=%d delay=%dms size=%d\n",
+                    test_num, N_TESTS, retry, MAX_RETRY, pub_qos, sub_qos, delay_ms, msg_size);
+            
+            g_done = 0;
+            
+            MQTTClient_publish(g_client, "request/go", (int)strlen("reset"), "reset", 1, 0, NULL);
+            sleep(2);
+            
+            MQTTClient_disconnect(g_client, MQTT_TIMEOUT);
+            sleep(1);
+            if (connect_and_subscribe(sub_qos) != 0) {
+                fprintf(stderr, "analyser: failed to reconnect for retry\n");
+                continue;  // Try reconnect again on next retry
+            }
+        }
+        
+        // Run the test
+        fprintf(stderr, "\n[%d/%d] pq=%d sq=%d delay=%dms size=%d\n",
+                test_num, N_TESTS, pub_qos, sub_qos, delay_ms, msg_size);
+        
+        g_done = 0;
+        
+        logger_set_test(&g_logger, pub_qos, sub_qos, delay_ms, msg_size);
+        sys_mon_start(&g_sys, pub_qos, sub_qos, delay_ms, msg_size);
+        
+        char qos_str[4], delay_str[8], size_str[8];
+        snprintf(qos_str, sizeof(qos_str), "%d", pub_qos);
+        snprintf(delay_str, sizeof(delay_str), "%d", delay_ms);
+        snprintf(size_str, sizeof(size_str), "%d", msg_size);
+        
+        MQTTClient_publish(g_client, "request/qos",
+                           (int)strlen(qos_str), qos_str, 1, 0, NULL);
+        MQTTClient_publish(g_client, "request/delay",
+                           (int)strlen(delay_str), delay_str, 1, 0, NULL);
+        MQTTClient_publish(g_client, "request/messagesize",
+                           (int)strlen(size_str), size_str, 1, 0, NULL);
+        
+        usleep(PARAM_SETTLE_MS * 1000);
+        
+        MQTTClient_publish(g_client, "request/go", (int)strlen("start"), "start", 1, 0, NULL);
+        g_test_start_ts = get_timestamp_ms();
+        fprintf(stderr, "analyser: 'start' sent. Running %ds..\n", TEST_DURATION_S);
+        
+        int waited = 0;
+        int limit = TEST_DURATION_S + TIMEOUT_GRACE_S;
+        while (!g_done && waited < limit) {
+            sleep(1);
+            waited++;
+        }
+        
+        g_test_end_ts = get_timestamp_ms();
+        
+        if (g_done) {
+            fprintf(stderr, "analyser: 'done' received after %ds\n", waited);
+            
+            if (retry > 0) {
+                fprintf(stderr, "analyser: retry succeeded for test [%d/%d]\n", test_num, N_TESTS);
+            }
+            
+            write_ts_meta(&g_logger, g_test_start_ts, g_test_end_ts);
+            logger_flush(&g_logger);
+            sys_mon_stop(&g_sys);
+            return;  // Success - exit retry loop
+        } else {
+            fprintf(stderr, "analyser: timeout after %ds\n", waited);
+            MQTTClient_publish(g_client, "request/go", (int)strlen("reset"), "reset", 1, 0, NULL);
+            
+            // Wait for potential delayed done
+            int reset_waited = 0;
+            while (!g_done && reset_waited < 5) {
+                sleep(1);
+                reset_waited++;
+            }
+            
+            if (g_done) {
+                fprintf(stderr, "analyser: received 'done' after reset (%ds)\n", reset_waited);
+                write_ts_meta(&g_logger, g_test_start_ts, g_test_end_ts);
+                logger_flush(&g_logger);
+                sys_mon_stop(&g_sys);
+                return;  // Success
+            }
+            
+            fprintf(stderr, "analyser: no 'done' after reset\n");
+            logger_flush(&g_logger);
+            sys_mon_stop(&g_sys);
+            
+            if (retry == MAX_RETRY) {
+                fprintf(stderr, "analyser: all %d retries exhausted for test [%d/%d]. Giving up.\n", 
+                        MAX_RETRY, test_num, N_TESTS);
+                return;
+            }
+        }
     }
- 
-    g_test_end_ts = get_timestamp_ms(); 
-
-    if (g_done) {
-        fprintf(stderr, "analyser: 'done' received after %ds\n", waited);
-    } else {
-        fprintf(stderr, "analyser: timeout after %ds. Flushing anyway\n", waited);
-        MQTTClient_publish(g_client, "request/go", (int)strlen("reset"), "reset", 1, 0, NULL);
-        sleep(2);
-    }
-
-    write_ts_meta(&g_logger, g_test_start_ts, g_test_end_ts);
- 
-    logger_flush(&g_logger);
-    sys_mon_stop(&g_sys);
 }
 
 int main(int argc, char *argv[]) {
