@@ -8,8 +8,9 @@ monitoring/grafana/unified-search
 
 monitoring/influxdb
 
-.DS_Store
+*/.DS_Store
 
 backup*.zip
 
 .idea
+monitoring/grafana/provisioning/.DS_Store
