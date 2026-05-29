@@ -99,52 +99,44 @@ static int on_message(void *context, char *topic, int topic_len, MQTTClient_mess
 
     if (strncmp(topic, "counter/", 8) == 0) {
         char expected[64];
-        snprintf(expected, sizeof(expected), 
+        snprintf(expected, sizeof(expected),
             "counter/%d/%d/%d",
             g_logger.pub_qos, g_logger.delay_ms, g_logger.msg_size
         );
 
-        // discards stale message from previous test
         if (strcmp(topic, expected) != 0) {
             MQTTClient_freeMessage(&msg);
             MQTTClient_free(topic);
-            return 1; 
+            return 1;
         }
 
         long long counter, pub_ts;
         if (parse_payload(payload, &counter, &pub_ts) == 0) {
-            /*
-             * Discard messages whose pub_timestamp predates when we
-             * sent "start". These are stale messages from the previous
-             * test still draining from the broker queue.
-             */
             if (pub_ts < g_test_start_ts - PARAM_SETTLE_MS) {
                 MQTTClient_freeMessage(&msg);
                 MQTTClient_free(topic);
                 return 1;
             }
-
             int msg_size = parse_msg_size_from_topic(topic);
             logger_write(&g_logger, counter, pub_ts, recv_ts, topic, msg_size);
         }
 
-        else if (strcmp(topic, "request/go") == 0) {
-            fprintf(stderr, "[DEBUG] on_message: request/go payload='%s' recv_ts=%lld start_ts=%lld\n",
-                payload, recv_ts, g_test_start_ts);
+    } else if (strcmp(topic, "request/go") == 0) { 
+        fprintf(stderr, "[DEBUG] on_message: request/go payload='%s' recv_ts=%lld start_ts=%lld\n",
+            payload, recv_ts, g_test_start_ts);
 
-            // Accept "done:<nonce>" only. guards against stale QoS-2 redeliveries of a previous test's "done" arriving on the new subscription.
-            char expected_done[32];
-            snprintf(expected_done, sizeof(expected_done), "done:%lld", g_nonce);
+        char expected_done[32];
+        snprintf(expected_done, sizeof(expected_done), "done:%lld", g_nonce);
 
-            if (strcmp(payload, expected_done) == 0 && recv_ts > g_test_start_ts) {
-                g_done = 1;
-            }
+        if (strcmp(payload, expected_done) == 0 && recv_ts > g_test_start_ts) {
+            g_done = 1;
         }
+    }
 
     }
     MQTTClient_freeMessage(&msg);
     MQTTClient_free(topic);
-    return 1; 
+    return 1;
 }
 
 /*
