@@ -22,4 +22,5 @@ mkdir -p "$LOCAL_PATH"
 
 echo "Fetching logs from $USER@$HOST..."
 scp -i "$KEY" -r "$USER@$HOST:$REMOTE_PATH" "$LOCAL_PATH"
+scp -i "$KEY" "$USER@$HOST:$REMOTE_PATH/backup_*.zip" "$LOCAL_PATH"
 echo "Done. Files saved to $LOCAL_PATH"
