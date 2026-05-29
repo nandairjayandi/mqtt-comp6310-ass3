@@ -419,33 +419,18 @@ def read_test_metadata(analyser_dir: str) -> list[TestMetadata]:
 
     return results
 
-
-def discover_tests_from_files(analyser_dir: str,
+def discover_all_test_combos(analyser_dir: str,
                               publisher_dir: str) -> list[TestStats]:
     """
-    Bypass the broken test_timestamps.tsv by scanning the analyser directory
-    for files matching  pq{N}_sq{N}_d{N}_s{N}.tsv  and deriving every
-    parameter from the filename and file contents.
-
-    For each analyser file:
-      • pub_qos, sub_qos, delay_ms, msg_size  ← parsed from filename
-      • start_ts = min(pub_timestamp) in the file
-      • end_ts   = max(pub_timestamp) in the file
-      • pub_file = <publisher_dir>/pq{pub_qos}_d{delay_ms}_s{msg_size}.tsv
-                   (publisher files omit sub_qos — matches your directory layout)
-      • ana_file = the analyser file itself
-
-    Returns a list of fully-populated TestStats objects ready to pass to
-    calc_test_stats().  Files are returned sorted by (pub_qos, sub_qos,
-    delay_ms, msg_size) for a deterministic report order.
+    Scan for ALL pq*_sq*_d*_s*.tsv files in analyser_dir that have a matching
+    publisher file. Returns TestStats with start_ts/end_ts=0 for empty files.
+    Never skips a combo just because the analyser file has no data.
     """
     import re
 
     ana_dir = Path(analyser_dir)
     pub_dir = Path(publisher_dir)
-    pattern = re.compile(
-        r"^pq(\d+)_sq(\d+)_d(\d+)_s(\d+)\.tsv$"
-    )
+    pattern = re.compile(r"^pq(\d+)_sq(\d+)_d(\d+)_s(\d+)\.tsv$")
 
     results: list[TestStats] = []
 
@@ -456,16 +441,15 @@ def discover_tests_from_files(analyser_dir: str,
 
         pq = int(m.group(1))
         sq = int(m.group(2))
-        d = int(m.group(3))
+        d  = int(m.group(3))
         sz = int(m.group(4))
 
-        # Derive the publisher file (no sub_qos in publisher naming).
         pub_path = pub_dir / f"pq{pq}_d{d}_s{sz}.tsv"
         if not pub_path.exists():
             print(f"  [warn] publisher file not found, skipping: {pub_path}", file=sys.stderr)
             continue
 
-        # Scan the analyser file for the timestamp window.
+        # Try to find the timestamp window; leave as 0 if file is empty.
         min_ts: Optional[int] = None
         max_ts: Optional[int] = None
         try:
@@ -491,25 +475,30 @@ def discover_tests_from_files(analyser_dir: str,
             continue
 
         if min_ts is None:
-            print(f"  [warn] no data in {ana_path.name}, skipping.", file=sys.stderr)
-            continue
+            print(f"  [warn] no data in {ana_path.name}, marking as empty.", file=sys.stderr)
 
         results.append(TestStats(
             pub_file=str(pub_path),
             ana_file=str(ana_path),
-            sys_file="",  # filled in by caller if needed
-            start_ts=min_ts,
-            end_ts=max_ts,
+            sys_file="",
+            start_ts=min_ts or 0,
+            end_ts=max_ts or 0,
             pub_qos=pq,
             sub_qos=sq,
             delay_ms=d,
             msg_size=sz,
-            recv_retries=re
+            recv_retries=0,
         ))
 
     results.sort(key=lambda s: (s.pub_qos, s.sub_qos, s.delay_ms, s.msg_size))
     return results
 
+
+def discover_tests_from_files(analyser_dir: str,
+                               publisher_dir: str) -> list[TestStats]:
+    """Returns only combos that have data (start_ts != 0). Used for calc_test_stats."""
+    return [s for s in discover_all_test_combos(analyser_dir, publisher_dir)
+            if s.start_ts != 0]
 
 def print_test_stats(stats: TestStats) -> None:
     print(f"[REPORT] Test: pq={stats.pub_qos} sq={stats.sub_qos} "
@@ -571,32 +560,23 @@ def build_stats_tsv_row(fp, stats: TestStats) -> None:
     )
 
 
-def plot_box_whisker(all_stats: list[TestStats],
-                     output_path: Optional[str] = None,
-                     battery_start_ts: Optional[int] = None,
-                     battery_end_ts: Optional[int] = None,
-                     figsize: tuple = (54, 10)) -> None:
-    """
-    Produce a 2×2 grid of box-and-whisker plots from a list of TestStats.
-
-    Parameters
-    ----------
-    all_stats         : list of populated TestStats objects.
-    output_path       : if given, save figure here instead of showing.
-    battery_start_ts  : Unix ms of the first test start (for subtitle).
-    battery_end_ts    : Unix ms of the last test end   (for subtitle).
-    figsize           : (width, height) in inches.  Widen to spread x-labels.
-    """
+def plot_box_whisker(
+    all_stats: list[TestStats],
+    all_labels_ordered: list[str],
+    labels_no_data: set[str],
+    output_dir: Optional[str] = None,
+    battery_start_ts: Optional[int] = None,
+    battery_end_ts: Optional[int] = None,
+    figsize: tuple = (13.5, 10.125),
+) -> None:
     if not all_stats:
         print("plot_box_whisker: no stats to plot.", file=sys.stderr)
         return
 
     gap_records = []
     scalar_records = []
-
     for s in all_stats:
         label = f"QoS {s.pub_qos}/{s.sub_qos}\n{s.delay_ms}ms delay\n{s.msg_size}-x"
-
         gap_raw = getattr(s, "_gap_raw", [])
         for g in gap_raw:
             gap_records.append({"label": label, "gap_ms": g})
@@ -610,75 +590,106 @@ def plot_box_whisker(all_stats: list[TestStats],
     gap_df = pd.DataFrame(gap_records)
     scalar_df = pd.DataFrame(scalar_records)
 
-    fig, axes = plt.subplots(2, 2, figsize=figsize)
+    def _box(df, col, title, ylabel, colour, is_pct: bool = False, output_path=None):
+        fig, ax = plt.subplots(figsize=figsize)
 
-    title = "MQTT Test Statistics – Box & Whisker"
-    if battery_start_ts is not None and battery_end_ts is not None:
-        subtitle = (f"battery start: {_ts_ms_to_local_iso(battery_start_ts)}"
-                    f"  –  end: {_ts_ms_to_local_iso(battery_end_ts)}")
-        fig.suptitle(f"{title}\n{subtitle}", fontsize=13, fontweight="bold", linespacing=1.6)
-    else:
-        fig.suptitle(title, fontsize=14, fontweight="bold")
+        valid_positions = []
+        valid_groups = []
+        for i, lbl in enumerate(all_labels_ordered):
+            if not df.empty and lbl in df["label"].values:
+                vals = df[df["label"] == lbl][col].values
+                valid_positions.append(i + 1)
+                valid_groups.append(vals)
 
-    def _box(ax, df, col, title, ylabel, colour):
-        groups = [grp[col].values for _, grp in df.groupby("label", sort=False)]
-        labels = [lbl for lbl, _ in df.groupby("label", sort=False)]
+        if valid_groups:
+            bp = ax.boxplot(
+                valid_groups,
+                positions=valid_positions,
+                patch_artist=True,
+                medianprops=dict(color="black", linewidth=2),
+                flierprops=dict(marker="o", markersize=2, alpha=0.3),
+                showfliers=True,
+            )
+            for patch in bp["boxes"]:
+                patch.set_facecolor(colour)
+                patch.set_alpha(0.6)
 
-        bp = ax.boxplot(groups, tick_labels=labels, patch_artist=True,
-                        medianprops=dict(color="black", linewidth=2),
-                        flierprops=dict(marker="o", markersize=2, alpha=0.3),
-                        showfliers=True)
-        for patch in bp["boxes"]:
-            patch.set_facecolor(colour)
-            patch.set_alpha(0.6)
+        ax.set_xticks(range(1, len(all_labels_ordered) + 1))
+        ax.set_xticklabels(all_labels_ordered, fontsize=7, rotation=45, ha="right")
+        ax.set_xlim(0.5, len(all_labels_ordered) + 0.5)
 
-        all_vals = np.concatenate(groups)
-        v_max = float(np.max(all_vals))
-        v_min = float(np.min(all_vals))
-        q1_all = float(np.percentile(all_vals, 25))
-        q3_all = float(np.percentile(all_vals, 75))
-        iqr_all = q3_all - q1_all
+        for i, lbl in enumerate(all_labels_ordered):
+            if lbl in labels_no_data:
+                ax.annotate(
+                    "^",
+                    xy=(i + 1, 0),
+                    xycoords=("data", "axes fraction"),
+                    ha="center", va="bottom",
+                    fontsize=11, color="red", fontweight="bold",
+                    annotation_clip=False,
+                )
 
-        if v_max == 0.0:
-            ax.set_ylim(-0.05, 1.0)
-            ax.text(0.5, 0.5, "all zero",
-                    transform=ax.transAxes, ha="center", va="center",
-                    fontsize=10, color="gray", style="italic")
-        elif iqr_all == 0.0:
-            ax.set_ylim(0, v_max * 1.5 if v_max > 0 else 1.0)
+        if is_pct:
+            ax.set_ylim(0, 100)
+        elif valid_groups:
+            all_vals = np.concatenate(valid_groups)
+            v_max = float(np.max(all_vals))
+            q1_all = float(np.percentile(all_vals, 25))
+            q3_all = float(np.percentile(all_vals, 75))
+            iqr_all = q3_all - q1_all
+
+            if v_max == 0.0:
+                ax.set_ylim(-0.05, 1.0)
+                ax.text(0.5, 0.5, "all zero",
+                        transform=ax.transAxes, ha="center", va="center",
+                        fontsize=10, color="gray", style="italic")
+            elif iqr_all == 0.0:
+                ax.set_ylim(0, v_max * 1.5 if v_max > 0 else 1.0)
+            else:
+                fence_hi = q3_all + 3.0 * iqr_all
+                fence_lo = max(0.0, q1_all - 1.5 * iqr_all)
+                y_hi = max(fence_hi, float(np.percentile(all_vals, 99)))
+                ax.set_ylim(fence_lo, y_hi)
+                if v_max > y_hi:
+                    ax.text(0.98, 0.98, f"max {v_max:.3g} clipped",
+                            transform=ax.transAxes, ha="right", va="top",
+                            fontsize=7, color="gray", style="italic")
+
+        main_title = f"MQTT Test Statistics – {title}"
+        if battery_start_ts is not None and battery_end_ts is not None:
+            subtitle = (f"battery start: {_ts_ms_to_local_iso(battery_start_ts)} "
+                        f"– end: {_ts_ms_to_local_iso(battery_end_ts)}")
+            fig.suptitle(f"{main_title}\n{subtitle}", fontsize=11, fontweight="bold", linespacing=1.6)
         else:
-            fence_hi = q3_all + 3.0 * iqr_all
-            fence_lo = max(0.0, q1_all - 1.5 * iqr_all)
-            y_hi = max(fence_hi, float(np.percentile(all_vals, 99)))
-            ax.set_ylim(fence_lo, y_hi)
+            fig.suptitle(main_title, fontsize=12, fontweight="bold")
 
-            if v_max > y_hi:
-                ax.text(0.98, 0.98,
-                        f"max {v_max:.3g} clipped",
-                        transform=ax.transAxes, ha="right", va="top",
-                        fontsize=7, color="gray", style="italic")
-        ax.set_title(title, fontsize=11)
         ax.set_ylabel(ylabel)
         ax.set_xlabel("QoS pair / delay")
-        ax.tick_params(axis="x", labelsize=7, rotation=45)
         ax.grid(axis="y", linestyle="--", alpha=0.5)
 
-    if not gap_df.empty:
-        _box(axes[0, 0], gap_df, "gap_ms", "Inter-message gap", "ms", "#4C72B0")
+        plt.tight_layout()
+        if output_path:
+            plt.savefig(output_path, dpi=150)
+            print(f"Figure saved to {output_path}")
+        else:
+            plt.show()
+        plt.close(fig)
+
+    if output_dir:
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        _box(gap_df, "gap_ms", "Inter-message gap", "ms", "#4C72B0", is_pct=False,
+             output_path=str(Path(output_dir) / "inter_message_gap.png"))
+        _box(scalar_df, "loss_pct", "Message loss", "%", "#DD8452", is_pct=True,
+             output_path=str(Path(output_dir) / "message_loss.png"))
+        _box(scalar_df, "ooo_pct", "Out-of-order", "%", "#55A868", is_pct=True,
+             output_path=str(Path(output_dir) / "out_of_order.png"))
+        _box(scalar_df, "dup_pct", "Duplicates", "%", "#C44E52", is_pct=True,
+             output_path=str(Path(output_dir) / "duplicates.png"))
     else:
-        axes[0, 0].set_title("Inter-message gap (no data)")
-
-    _box(axes[0, 1], scalar_df, "loss_pct", "Message loss", "%", "#DD8452")
-    _box(axes[1, 0], scalar_df, "ooo_pct", "Out-of-order", "%", "#55A868")
-    _box(axes[1, 1], scalar_df, "dup_pct", "Duplicates", "%", "#C44E52")
-
-    plt.tight_layout()
-
-    if output_path:
-        plt.savefig(output_path, dpi=150)
-        print(f"Figure saved to {output_path}")
-    else:
-        plt.show()
+        _box(gap_df, "gap_ms", "Inter-message gap", "ms", "#4C72B0", is_pct=False)
+        _box(scalar_df, "loss_pct", "Message loss", "%", "#DD8452", is_pct=True)
+        _box(scalar_df, "ooo_pct", "Out-of-order", "%", "#55A868", is_pct=True)
+        _box(scalar_df, "dup_pct", "Duplicates", "%", "#C44E52", is_pct=True)
 
 def _build_combo_palette(combos: list[str]) -> dict[str, tuple]:
     """
@@ -704,7 +715,6 @@ def _build_combo_palette(combos: list[str]) -> dict[str, tuple]:
 
     return {combo: colours[i] for i, combo in enumerate(combos)}
 
-
 def plot_msg_per_time(
         analyser_dir: str,
         metadata: list[TestMetadata],
@@ -714,16 +724,12 @@ def plot_msg_per_time(
         battery_end_ts: Optional[int] = None,
         figsize: tuple = (28, 9),
 ) -> None:
-    """
-    For each test in *metadata*, read its analyser TSV, bin received messages
-    into *bucket_secs*-second windows relative to start_ts, then plot all
-    series on one axes.
-    """
     if not metadata:
         print("plot_msg_per_time: no metadata entries.", file=sys.stderr)
         return
 
     bucket_ms = bucket_secs * 1000
+    origin_ts = battery_start_ts if battery_start_ts is not None else metadata[0].start_ts
 
     # Derive all unique combo labels in metadata order (preserves test order).
     seen: set[str] = set()
@@ -747,11 +753,10 @@ def plot_msg_per_time(
                      fontsize=12, fontweight="bold", linespacing=1.6)
     else:
         fig.suptitle(main_title, fontsize=13, fontweight="bold")
-    ax.set_xlabel(f"Time since test start (s), bucketed to {bucket_secs}s")
+    ax.set_xlabel(f"Time since battery start (s), bucketed to {bucket_secs}s")
     ax.set_ylabel("Messages received")
     ax.grid(axis="y", linestyle="--", alpha=0.4)
 
-    # Track which combos we have already added a legend entry for.
     legend_added: set[str] = set()
 
     for test_idx, m in enumerate(metadata, start=1):
@@ -762,7 +767,6 @@ def plot_msg_per_time(
             print(f"  [warn] test {test_idx}: analyser file not found: {ana_path}", file=sys.stderr)
             continue
 
-        # Read recv_timestamps in the test window.
         bucket_counts: dict[int, int] = defaultdict(int)
         try:
             with open(ana_path, newline="") as fp:
@@ -781,8 +785,7 @@ def plot_msg_per_time(
                         continue
                     if not (m.start_ts <= pub_ts <= m.end_ts):
                         continue
-                    # Bucket index relative to test start (in seconds).
-                    bucket = ((recv_ts - m.start_ts) // bucket_ms) * bucket_secs
+                    bucket = ((recv_ts - origin_ts) // bucket_ms) * bucket_secs
                     bucket_counts[bucket] += 1
         except OSError as e:
             print(f"  [warn] test {test_idx}: cannot open {ana_path}: {e}", file=sys.stderr)
@@ -795,7 +798,6 @@ def plot_msg_per_time(
         ys = [bucket_counts[x] for x in xs]
         colour = palette[combo]
 
-        # Only add a legend entry the first time this combo appears.
         label = combo if combo not in legend_added else None
         legend_added.add(combo)
 
@@ -803,7 +805,11 @@ def plot_msg_per_time(
                 marker="o", markersize=3, linewidth=1.4,
                 color=colour, label=label, alpha=0.85)
 
-    # Build a clean legend (one entry per combo, sorted).
+    # Draw vertical separator lines at each test boundary — ax exists now
+    for m in metadata:
+        x_start = (m.start_ts - origin_ts) / 1000
+        ax.axvline(x=x_start, color="gray", linewidth=0.4, linestyle=":", alpha=0.5)
+
     handles, labels = ax.get_legend_handles_labels()
     if handles:
         ax.legend(
@@ -812,7 +818,7 @@ def plot_msg_per_time(
             fontsize=7,
             title_fontsize=8,
             loc="upper right",
-            ncol=max(1, len(handles) // 18),  # auto-columnise for many entries
+            ncol=max(1, len(handles) // 18),
             framealpha=0.7,
         )
 
@@ -824,32 +830,24 @@ def plot_msg_per_time(
     else:
         plt.show()
 
-
 def _run_all(analyser_dir: str,
              publisher_dir: str,
              sys_dir: Optional[str] = None,
              bucket_secs: int = 10) -> None:
-    """
-    Discover every test combo from the analyser directory, compute stats,
-    write a summary TSV, and produce both plots.
 
-    Parameters
-    ----------
-    analyser_dir  : directory holding pq*_sq*_d*_s*.tsv analyser files.
-    publisher_dir : directory holding pq*_d*_s*.tsv publisher files.
-    sys_dir       : optional directory for SYS broker TSV files.
-    bucket_secs   : bucket width for the msg-per-time plot.
-    """
-    all_stats = discover_tests_from_files(analyser_dir, publisher_dir)
-    if not all_stats:
+    # ALL 54 combos — including empty ones — for x-axis labels.
+    all_combos = discover_all_test_combos(analyser_dir, publisher_dir)
+    if not all_combos:
         print("No test files discovered – aborting.", file=sys.stderr)
         return
+    print(f"Discovered {len(all_combos)} test combination(s) total.")
 
-    print(f"Discovered {len(all_stats)} test combination(s).")
+    # Only combos with data — for stats computation.
+    all_discovered = [s for s in all_combos if s.start_ts != 0]
+    print(f"  {len(all_discovered)} have data, {len(all_combos) - len(all_discovered)} are empty.")
 
-    # Attach sys_file paths if a sys directory was provided.
     if sys_dir:
-        for s in all_stats:
+        for s in all_discovered:
             sys_path = (Path(sys_dir) /
                         f"sys_pq{s.pub_qos}_sq{s.sub_qos}_d{s.delay_ms}_s{s.msg_size}.tsv")
             s.sys_file = str(sys_path) if sys_path.exists() else ""
@@ -859,8 +857,7 @@ def _run_all(analyser_dir: str,
 
     with open(summary_path, "w") as tsv_out:
         build_stats_tsv_header(tsv_out)
-
-        for s in all_stats:
+        for s in all_discovered:
             if calc_test_stats(s) == 0:
                 print_test_stats(s)
                 if s.sys_file:
@@ -874,23 +871,39 @@ def _run_all(analyser_dir: str,
 
     print(f"\nSummary TSV written to {summary_path}")
 
-    # Overall battery window (min start → max end across all computed tests).
-    battery_start = min(s.start_ts for s in computed) if computed else None
-    battery_end = max(s.end_ts for s in computed) if computed else None
+    # Full label list from ALL 54 combos.
+    seen: set[str] = set()
+    all_labels_ordered: list[str] = []
+    for s in all_combos:
+        lbl = f"QoS {s.pub_qos}/{s.sub_qos}\n{s.delay_ms}ms delay\n{s.msg_size}-x"
+        if lbl not in seen:
+            seen.add(lbl)
+            all_labels_ordered.append(lbl)
 
-    # Build TestMetadata list from computed stats for plot_msg_per_time.
+    labels_with_data = {
+        f"QoS {s.pub_qos}/{s.sub_qos}\n{s.delay_ms}ms delay\n{s.msg_size}-x"
+        for s in computed
+    }
+    labels_no_data = set(all_labels_ordered) - labels_with_data
+
+    battery_start = min(s.start_ts for s in computed) if computed else None
+    battery_end   = max(s.end_ts   for s in computed) if computed else None
+
     metadata = [
         TestMetadata(
             pub_qos=s.pub_qos, sub_qos=s.sub_qos,
             delay_ms=s.delay_ms, msg_size=s.msg_size,
             start_ts=s.start_ts, end_ts=s.end_ts,
+            recv_retries=s.recv_retries,
         )
         for s in computed
     ]
 
     plot_box_whisker(
         computed,
-        output_path=str(Path(analyser_dir) / "boxplot.png"),
+        all_labels_ordered=all_labels_ordered,
+        labels_no_data=labels_no_data,
+        output_dir=str(Path(analyser_dir) / "plots"),
         battery_start_ts=battery_start,
         battery_end_ts=battery_end,
     )
