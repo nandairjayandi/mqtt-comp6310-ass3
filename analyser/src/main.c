@@ -121,7 +121,7 @@ static int on_message(void *context, char *topic, int topic_len, MQTTClient_mess
             logger_write(&g_logger, counter, pub_ts, recv_ts, topic, msg_size);
         }
 
-    } else if (strcmp(topic, "request/go") == 0) { 
+    } else if (strcmp(topic, "request/go") == 0) {   
         fprintf(stderr, "[DEBUG] on_message: request/go payload='%s' recv_ts=%lld start_ts=%lld\n",
             payload, recv_ts, g_test_start_ts);
 
@@ -133,7 +133,6 @@ static int on_message(void *context, char *topic, int topic_len, MQTTClient_mess
         }
     }
 
-    }
     MQTTClient_freeMessage(&msg);
     MQTTClient_free(topic);
     return 1;
