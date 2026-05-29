@@ -164,6 +164,7 @@ static void run_test(int test_num, int pub_qos, int sub_qos, int delay_ms, int m
                     test_num, N_TESTS, retry, MAX_RETRY, pub_qos, sub_qos, delay_ms, msg_size);
             
             g_done = 0;
+            logger_discard(&g_logger);
             
             MQTTClient_publish(g_client, "request/go", (int)strlen("reset"), "reset", 1, 0, NULL);
             sleep(2);
@@ -228,6 +229,7 @@ static void run_test(int test_num, int pub_qos, int sub_qos, int delay_ms, int m
             
             write_ts_meta(&g_logger, g_test_start_ts, g_test_end_ts);
             logger_flush(&g_logger);
+            logger_commit(&g_logger);
             sys_mon_stop(&g_sys);
             return;  // Success - exit retry loop
         } else {
@@ -256,6 +258,7 @@ static void run_test(int test_num, int pub_qos, int sub_qos, int delay_ms, int m
             if (retry == MAX_RETRY) {
                 fprintf(stderr, "analyser: all %d retries exhausted for test [%d/%d]. Giving up.\n", 
                         MAX_RETRY, test_num, N_TESTS);
+                logger_discard(&g_logger);
                 return;
             }
         }
