@@ -164,7 +164,8 @@ static void run_test(int test_num, int pub_qos, int sub_qos, int delay_ms, int m
                     test_num, N_TESTS, retry, MAX_RETRY, pub_qos, sub_qos, delay_ms, msg_size);
             
             g_done = 0;
-            logger_discard(&g_logger);
+            logger_discard(&g_logger);  
+            logger_set_test(&g_logger, pub_qos, sub_qos, delay_ms, msg_size);  
             
             MQTTClient_publish(g_client, "request/go", (int)strlen("reset"), "reset", 1, 0, NULL);
             sleep(2);
