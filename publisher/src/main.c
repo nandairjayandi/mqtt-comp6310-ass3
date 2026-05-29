@@ -260,7 +260,7 @@ int main(int argc, char *argv[]) {
             run_burst();
             char done_payload[40];
             snprintf(done_payload, sizeof(done_payload), "done:%s", g_start_nonce);
-            MQTTClient_publish(g_client, "request/go", (int)strlen(done_payload), done_payload, 1, 0, NULL);
+            MQTTClient_publish(g_client, "request/go", (int)strlen(done_payload), done_payload, 2, 0, NULL);
             fprintf(stderr, "publisher: sent '%s' to request/go\n", done_payload);
             fprintf(stderr, "publisher: ready for next run\n");
         }
