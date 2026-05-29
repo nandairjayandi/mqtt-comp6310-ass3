@@ -29,7 +29,7 @@
 #define TIMEOUT_GRACE_S 30 // How many seconds to wait beyond test duration before giving up
 #define PARAM_SETTLE_MS 500 // How many ms to wait after publishing params before "start"
 #define INTER_TEST_SLEEP_S 2 // Seconds pause between tests to let broker settle
-#define MAX_RETRY 100 //
+#define MAX_RETRY 10 //
 
 #define CLIENT_ID "analyser-01"
 #define MQTT_TIMEOUT 10000L
@@ -38,7 +38,8 @@
 static logger_t g_logger;
 static sys_mon_t g_sys;
 static volatile int g_done = 0; // set when "done" received on request/go msg
-static MQTTClient g_client;
+static MQTTClient g_data_client;   // counter/# only, can lose messages
+static MQTTClient g_ctrl_client;   // request/go only, pray that it will never flooded
 static const char *g_broker;
 static volatile long long g_test_start_ts = 0;
 static volatile long long g_test_end_ts = 0;
@@ -143,18 +144,29 @@ static int on_message(void *context, char *topic, int topic_len, MQTTClient_mess
  */
 static int connect_and_subscribe(int sub_qos) {
     MQTTClient_connectOptions conn = MQTTClient_connectOptions_initializer;
-    conn.keepAliveInterval = 20; conn.cleansession = 1;
+    conn.keepAliveInterval = 60; conn.cleansession = 1;
  
-    int rc = MQTTClient_connect(g_client, &conn);
+    int rc = MQTTClient_connect(g_data_client, &conn);
     if (rc != MQTTCLIENT_SUCCESS) {
-        fprintf(stderr, "analyser: connect failed (rc=%d)\n", rc);
+        fprintf(stderr, "analyser: data client connect failed (rc=%d)\n", rc);
+        return -1;
+    }
+    rc = MQTTClient_connect(g_ctrl_client, &conn);
+    if (rc != MQTTCLIENT_SUCCESS) {
+        fprintf(stderr, "analyser: ctrl client connect failed (rc=%d)\n", rc);
         return -1;
     }
  
-    MQTTClient_subscribe(g_client, "counter/#", sub_qos);
-    MQTTClient_subscribe(g_client, "request/go", sub_qos);
+    MQTTClient_subscribe(g_data_client, "counter/#", sub_qos);
+    // MQTTClient_subscribe(g_client, "request/go", sub_qos);
+    MQTTClient_subscribe(g_ctrl_client, "request/go", 2); // make this an important control plane at high priority
     fprintf(stderr, "analyser: connected, (re)subscribed at sub_qos=%d\n", sub_qos);
     return 0;
+}
+
+static void on_connection_lost(void *context, char *cause) {
+    fprintf(stderr, "analyser: CONNECTION LOST cause=%s\n", 
+            cause ? cause : "unknown");
 }
 
 static void run_test(int test_num, int pub_qos, int sub_qos, int delay_ms, int msg_size) {
@@ -167,10 +179,11 @@ static void run_test(int test_num, int pub_qos, int sub_qos, int delay_ms, int m
             logger_discard(&g_logger);  
             logger_set_test(&g_logger, pub_qos, sub_qos, delay_ms, msg_size);  
             
-            MQTTClient_publish(g_client, "request/go", (int)strlen("reset"), "reset", 1, 0, NULL);
+            MQTTClient_publish(g_ctrl_client, "request/go", (int)strlen("reset"), "reset", 1, 0, NULL);
             sleep(2);
             
-            MQTTClient_disconnect(g_client, MQTT_TIMEOUT);
+            MQTTClient_disconnect(g_data_client, MQTT_TIMEOUT);
+            MQTTClient_disconnect(g_ctrl_client, MQTT_TIMEOUT);
             sleep(1);
             if (connect_and_subscribe(sub_qos) != 0) {
                 fprintf(stderr, "analyser: failed to reconnect for retry\n");
@@ -192,12 +205,9 @@ static void run_test(int test_num, int pub_qos, int sub_qos, int delay_ms, int m
         snprintf(delay_str, sizeof(delay_str), "%d", delay_ms);
         snprintf(size_str, sizeof(size_str), "%d", msg_size);
         
-        MQTTClient_publish(g_client, "request/qos",
-                           (int)strlen(qos_str), qos_str, 1, 0, NULL);
-        MQTTClient_publish(g_client, "request/delay",
-                           (int)strlen(delay_str), delay_str, 1, 0, NULL);
-        MQTTClient_publish(g_client, "request/messagesize",
-                           (int)strlen(size_str), size_str, 1, 0, NULL);
+        MQTTClient_publish(g_ctrl_client, "request/qos", (int)strlen(qos_str), qos_str, 1, 0, NULL);
+        MQTTClient_publish(g_ctrl_client, "request/delay", (int)strlen(delay_str), delay_str, 1, 0, NULL);
+        MQTTClient_publish(g_ctrl_client, "request/messagesize", (int)strlen(size_str), size_str, 1, 0, NULL);
         
         usleep(PARAM_SETTLE_MS * 1000);
         
@@ -206,8 +216,7 @@ static void run_test(int test_num, int pub_qos, int sub_qos, int delay_ms, int m
         snprintf(start_payload, sizeof(start_payload), "start:%lld", g_test_start_ts);
         g_nonce = g_test_start_ts;  // store for on_message to check
 
-        MQTTClient_publish(g_client, "request/go",
-                           (int)strlen(start_payload), start_payload, 1, 0, NULL);
+        MQTTClient_publish(g_ctrl_client, "request/go", (int)strlen(start_payload), start_payload, 1, 0, NULL);
         fprintf(stderr, "analyser: 'start' sent (nonce=%lld). Running %ds..\n", g_nonce, TEST_DURATION_S);
 
         int waited = 0;
@@ -225,7 +234,6 @@ static void run_test(int test_num, int pub_qos, int sub_qos, int delay_ms, int m
             if (retry > 0) {
                 fprintf(stderr, "analyser: retry succeeded for test [%d/%d]\n", test_num, N_TESTS);
             }
-
             g_logger.test_success = retry; 
             
             write_ts_meta(&g_logger, g_test_start_ts, g_test_end_ts);
@@ -235,7 +243,7 @@ static void run_test(int test_num, int pub_qos, int sub_qos, int delay_ms, int m
             return;  // Success - exit retry loop
         } else {
             fprintf(stderr, "analyser: timeout after %ds\n", waited);
-            MQTTClient_publish(g_client, "request/go", (int)strlen("reset"), "reset", 1, 0, NULL);
+            MQTTClient_publish(g_ctrl_client, "request/go", (int)strlen("reset"), "reset", 1, 0, NULL);
             
             // Wait for potential delayed done
             int reset_waited = 0;
@@ -259,7 +267,9 @@ static void run_test(int test_num, int pub_qos, int sub_qos, int delay_ms, int m
             if (retry == MAX_RETRY) {
                 fprintf(stderr, "analyser: all %d retries exhausted for test [%d/%d]. Giving up.\n", 
                         MAX_RETRY, test_num, N_TESTS);
-                logger_discard(&g_logger);
+                g_logger.test_success = -1;
+                write_ts_meta(&g_logger, g_test_start_ts, g_test_end_ts);
+                logger_commit(&g_logger);
                 return;
             }
         }
@@ -310,8 +320,10 @@ int main(int argc, char *argv[]) {
 
     // Create and connect MQTT client 
     // MQTTClient_connectOptions conn_opts = MQTTClient_connectOptions_initializer;
-    MQTTClient_create(&g_client, g_broker, CLIENT_ID, MQTTCLIENT_PERSISTENCE_NONE, NULL);
-    MQTTClient_setCallbacks(g_client, NULL, NULL, on_message, NULL);
+    MQTTClient_create(&g_data_client, g_broker, "analyser-data", MQTTCLIENT_PERSISTENCE_NONE, NULL);
+    MQTTClient_create(&g_ctrl_client, g_broker, "analyser-ctrl", MQTTCLIENT_PERSISTENCE_NONE, NULL);
+    MQTTClient_setCallbacks(g_data_client, NULL, on_connection_lost, on_message, NULL);
+    MQTTClient_setCallbacks(g_ctrl_client, NULL, on_connection_lost, on_message, NULL);;
 
     fprintf(stderr, "analyser: starting %d-test suite against %s\n", N_TESTS, g_broker);
     fprintf(stderr, "analyser: test started at: %s\n", start_time_str);
@@ -323,7 +335,8 @@ int main(int argc, char *argv[]) {
         int sub_qos = SUB_QOS_VALS[si];
  
         if (!first_connection) {
-            MQTTClient_disconnect(g_client, MQTT_TIMEOUT);
+            MQTTClient_disconnect(g_data_client, MQTT_TIMEOUT);
+            MQTTClient_disconnect(g_ctrl_client, MQTT_TIMEOUT);
             fprintf(stderr, "analyser: disconnected. reconnecting at sub_qos=%d\n", sub_qos);
         }
         first_connection = 0;
@@ -345,8 +358,10 @@ int main(int argc, char *argv[]) {
         }
     }
  
-    MQTTClient_disconnect(g_client, MQTT_TIMEOUT);
-    MQTTClient_destroy(&g_client);
+    MQTTClient_disconnect(g_data_client, MQTT_TIMEOUT);
+    MQTTClient_disconnect(g_ctrl_client, MQTT_TIMEOUT);
+    MQTTClient_destroy(&g_data_client);
+    MQTTClient_destroy(&g_ctrl_client);
     sys_mon_destroy(&g_sys);
 
     long long test_end_ts = get_timestamp_ms(); 

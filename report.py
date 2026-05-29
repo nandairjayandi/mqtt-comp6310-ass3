@@ -49,6 +49,7 @@ class TestStats:
     msg_size: int = 0
 
     # computed fields
+    recv_retries: int = 0
     pub_attempts: int = 0
     pub_success: int = 0
     pub_success_rate: float = 0.0
@@ -75,6 +76,7 @@ class TestMetadata:
     msg_size: int
     start_ts: int
     end_ts: int
+    recv_retries: int
 
 
 def _ts_ms_to_local_iso(ts_ms: int) -> str:
@@ -392,7 +394,7 @@ def read_test_metadata(analyser_dir: str) -> list[TestMetadata]:
             if header:
                 header = False
                 continue
-            if len(parts) < 6:
+            if len(parts) < 7:
                 continue
             try:
                 pq = int(parts[0])
@@ -401,6 +403,7 @@ def read_test_metadata(analyser_dir: str) -> list[TestMetadata]:
                 sz = int(parts[3])
                 st = int(parts[4])
                 et = int(parts[5])
+                re = int(parts[6])
             except ValueError:
                 continue
             # Sanity-check: QoS must be 0-2, timestamps must be positive and
@@ -411,7 +414,7 @@ def read_test_metadata(analyser_dir: str) -> list[TestMetadata]:
                 continue
             results.append(TestMetadata(
                 pub_qos=pq, sub_qos=sq, delay_ms=d, msg_size=sz,
-                start_ts=st, end_ts=et,
+                start_ts=st, end_ts=et, recv_retries=0
             ))
 
     return results
@@ -501,6 +504,7 @@ def discover_tests_from_files(analyser_dir: str,
             sub_qos=sq,
             delay_ms=d,
             msg_size=sz,
+            recv_retries=re
         ))
 
     results.sort(key=lambda s: (s.pub_qos, s.sub_qos, s.delay_ms, s.msg_size))
@@ -528,6 +532,7 @@ def print_test_stats(stats: TestStats) -> None:
 def build_stats_tsv_header(fp) -> None:
     fp.write(
         "pub_qos\tsub_qos\tdelay_ms\tmsg_size\t"
+        "recv_retries\t"
         "pub_attempts\tpub_successes\tpub_success_rate\t"
         "expected\treceived\tlost\tloss_pct\t"
         "out_of_order\tooo_pct\t"
@@ -547,6 +552,7 @@ def build_stats_tsv_header(fp) -> None:
 def build_stats_tsv_row(fp, stats: TestStats) -> None:
     fp.write(
         f"{stats.pub_qos}\t{stats.sub_qos}\t{stats.delay_ms}\t{stats.msg_size}\t"
+        f"{stats.recv_retries}\t"
         f"{stats.pub_attempts}\t{stats.pub_success}\t{stats.pub_success_rate:.2f}\t"
         f"{stats.exp_msg}\t{stats.actual_recv}\t"
         f"{stats.loss_count}\t{stats.loss_perc:.4f}\t"
