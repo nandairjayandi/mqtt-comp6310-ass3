@@ -30,6 +30,9 @@ typedef struct {
     int         count; // entries currently in buffer   
     char        output_dir[LOGGER_DIR_MAX]; // directory to write files 
     
+    FILE        *pending_fp;
+    char        pending_path[LOGGER_DIR_MAX + 80];
+
     int         pub_qos;
     int         sub_qos;
     int         delay_ms;
@@ -54,6 +57,8 @@ int logger_init(logger_t *log, const char *output_dir);
 void logger_set_test(logger_t *log, int pub_qos, int sub_qos, int delay_ms, int msg_size);
 int logger_write(logger_t *log, long long counter, long long pub_ts, long long recv_ts, const char *topic, int msg_size);
 int logger_flush(logger_t *log);
+int logger_commit(logger_t *log);
+int logger_discard(logger_t *log);
 void logger_close(logger_t *log); 
 
 int logger_init_influx(logger_t *log, const char *url, const char *token, const char *org, const char *bucket);
