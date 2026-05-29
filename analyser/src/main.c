@@ -141,6 +141,7 @@ static int on_message(void *context, char *topic, int topic_len, MQTTClient_mess
             }
         }
 
+    }
     MQTTClient_freeMessage(&msg);
     MQTTClient_free(topic);
     return 1; 

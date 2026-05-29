@@ -224,12 +224,10 @@ int write_ts_meta(const logger_t *log, long long start_ts, long long end_ts) {
         fprintf(fp, "pub_qos\tsub_qos\tdelay_ms\tmsg_size\tstart_ts\tend_ts\n");
     }
     
-    fprintf(fp, 
-        "%d\t%d\t%d\t%d\t",
-        "%lld\t%lld\n",
-        log->pub_qos, log->sub_qos, log->delay_ms, log->msg_size,
-        start_ts, end_ts
-    );
+    fprintf(fp, "%d\t%d\t%d\t%d\t%lld\t%lld\t%d\n",
+            log->pub_qos, log->sub_qos, log->delay_ms, log->msg_size,
+            start_ts, end_ts,
+            log->test_success);
     
     fclose(fp);
     return 0;
