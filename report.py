@@ -564,11 +564,12 @@ def build_stats_tsv_row(fp, stats: TestStats) -> None:
         f"{stats.sys_metrics.get('sys_messages_stored', 'N/A')}\n"
     )
 
+
 def plot_box_whisker(all_stats: list[TestStats],
                      output_path: Optional[str] = None,
                      battery_start_ts: Optional[int] = None,
                      battery_end_ts: Optional[int] = None,
-                     figsize: tuple = (40, 10)) -> None:
+                     figsize: tuple = (54, 10)) -> None:
     """
     Produce a 2×2 grid of box-and-whisker plots from a list of TestStats.
 
@@ -588,8 +589,8 @@ def plot_box_whisker(all_stats: list[TestStats],
     scalar_records = []
 
     for s in all_stats:
-        # Updated label to include msg_size
-        label = f"QoS {s.pub_qos}/{s.sub_qos}\n{s.delay_ms}ms delay\n{s.msg_size}B"
+        label = f"QoS {s.pub_qos}/{s.sub_qos}\n{s.delay_ms}ms delay\n{s.msg_size}-x"
+
         gap_raw = getattr(s, "_gap_raw", [])
         for g in gap_raw:
             gap_records.append({"label": label, "gap_ms": g})
@@ -613,68 +614,47 @@ def plot_box_whisker(all_stats: list[TestStats],
     else:
         fig.suptitle(title, fontsize=14, fontweight="bold")
 
-    def _box(ax, df, col, title, ylabel, colour, cap_multiplier=4.0):
+    def _box(ax, df, col, title, ylabel, colour):
         groups = [grp[col].values for _, grp in df.groupby("label", sort=False)]
         labels = [lbl for lbl, _ in df.groupby("label", sort=False)]
 
-        # Calculate outliers for each group
-        outlier_counts = []
-        for group in groups:
-            q1 = np.percentile(group, 25)
-            q3 = np.percentile(group, 75)
-            iqr = q3 - q1
-            lower_bound = q1 - 1.5 * iqr
-            upper_bound = q3 + 1.5 * iqr
-            outliers = [x for x in group if x < lower_bound or x > upper_bound]
-            outlier_counts.append(len(outliers))
-
-        annotated_labels = []
-        for label, count in zip(labels, outlier_counts):
-            if count > 100:
-                annotated_labels.append(f"{label} (***)")
-            elif count > 10:
-                annotated_labels.append(f"{label} (**)")
-            elif count > 0:
-                annotated_labels.append(f"{label} (*)")
-            else:
-                annotated_labels.append(label)
-
-        # Plot the boxplot
-        bp = ax.boxplot(
-            groups,
-            tick_labels=annotated_labels,  # fixed: use tick_labels instead of labels
-            patch_artist=True,
-            medianprops=dict(color="black", linewidth=2),
-            flierprops=dict(marker='o', markersize=3, alpha=0.5),
-            showfliers=True  # still show outliers beyond the cap
-        )
-
-        # Set box colors
+        bp = ax.boxplot(groups, tick_labels=labels, patch_artist=True,
+                        medianprops=dict(color="black", linewidth=2),
+                        flierprops=dict(marker="o", markersize=2, alpha=0.3),
+                        showfliers=True)
         for patch in bp["boxes"]:
             patch.set_facecolor(colour)
             patch.set_alpha(0.6)
 
-        # Cap y-axis based on reasonable range
-        all_values = np.concatenate(groups)
-        q99 = np.percentile(all_values, 99)
-        q1 = np.percentile(all_values, 1)
+        all_vals = np.concatenate(groups)
+        v_max = float(np.max(all_vals))
+        v_min = float(np.min(all_vals))
+        q1_all = float(np.percentile(all_vals, 25))
+        q3_all = float(np.percentile(all_vals, 75))
+        iqr_all = q3_all - q1_all
 
-        iqr_all = np.percentile(all_values, 75) - np.percentile(all_values, 25)
-        proposed_cap = max(q99, np.percentile(all_values, 75) + cap_multiplier * iqr_all)
+        if v_max == 0.0:
+            ax.set_ylim(-0.05, 1.0)
+            ax.text(0.5, 0.5, "all zero",
+                    transform=ax.transAxes, ha="center", va="center",
+                    fontsize=10, color="gray", style="italic")
+        elif iqr_all == 0.0:
+            ax.set_ylim(0, v_max * 1.5 if v_max > 0 else 1.0)
+        else:
+            fence_hi = q3_all + 3.0 * iqr_all
+            fence_lo = max(0.0, q1_all - 1.5 * iqr_all)
+            y_hi = max(fence_hi, float(np.percentile(all_vals, 99)))
+            ax.set_ylim(fence_lo, y_hi)
 
-        ax.set_ylim(q1, proposed_cap)
-
-        # Add a note if data was capped
-        max_actual = np.max(all_values)
-        if max_actual > proposed_cap:
-            ax.text(0.98, 0.02, f"{max_actual:.0f}ms outlier clipped",
-                    transform=ax.transAxes, ha='right', va='bottom',
-                    fontsize=8, style='italic', color='gray')
-
+            if v_max > y_hi:
+                ax.text(0.98, 0.98,
+                        f"max {v_max:.3g} clipped",
+                        transform=ax.transAxes, ha="right", va="top",
+                        fontsize=7, color="gray", style="italic")
         ax.set_title(title, fontsize=11)
         ax.set_ylabel(ylabel)
-        ax.set_xlabel("QoS pair / delay / msg_size")
-        ax.tick_params(axis="x", labelsize=6, rotation=45)
+        ax.set_xlabel("QoS pair / delay")
+        ax.tick_params(axis="x", labelsize=7, rotation=45)
         ax.grid(axis="y", linestyle="--", alpha=0.5)
 
     if not gap_df.empty:
@@ -927,9 +907,9 @@ if __name__ == "__main__":
         epilog="""
 Examples
 --------
-  python stats.py out/analyser out/publisher
-  python stats.py out/analyser out/publisher --sys-dir out/sys
-  python stats.py out/analyser out/publisher --bucket-secs 5
+  python report.py out/analyser out/publisher
+  python report.py out/analyser out/publisher --sys-dir out/sys
+  python report.py out/analyser out/publisher --bucket-secs 5
 """,
     )
     parser.add_argument(
