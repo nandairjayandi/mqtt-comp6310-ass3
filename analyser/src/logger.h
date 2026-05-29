@@ -35,7 +35,7 @@ typedef struct {
     int         delay_ms;
     int         msg_size;
     
-    int         test_success; 
+    int         test_success; // how many retries before getting a successful run e.g. 3 means need 3 retries. 0 means works once, -1 fails after retries exhausted
 
     // for influxdb monitoring
     CURL        *curl;

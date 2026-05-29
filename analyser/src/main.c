@@ -42,6 +42,7 @@ static MQTTClient g_client;
 static const char *g_broker;
 static volatile long long g_test_start_ts = 0;
 static volatile long long g_test_end_ts = 0;
+static volatile long long g_nonce = 0;
 
 // Testing parameters
 static const int SUB_QOS_VALS[] = {0, 1, 2};
@@ -127,14 +128,16 @@ static int on_message(void *context, char *topic, int topic_len, MQTTClient_mess
             logger_write(&g_logger, counter, pub_ts, recv_ts, topic, msg_size);
         }
 
-        } else if (strcmp(topic, "request/go") == 0) {
+        else if (strcmp(topic, "request/go") == 0) {
             fprintf(stderr, "[DEBUG] on_message: request/go payload='%s' recv_ts=%lld start_ts=%lld\n",
-                payload, recv_ts, g_test_start_ts
-            );
-            if (strcmp(payload, "done") == 0) {
-                if (recv_ts > g_test_start_ts) {
-                    g_done = 1;
-                }
+                payload, recv_ts, g_test_start_ts);
+
+            // Accept "done:<nonce>" only. guards against stale QoS-2 redeliveries of a previous test's "done" arriving on the new subscription.
+            char expected_done[32];
+            snprintf(expected_done, sizeof(expected_done), "done:%lld", g_nonce);
+
+            if (strcmp(payload, expected_done) == 0 && recv_ts > g_test_start_ts) {
+                g_done = 1;
             }
         }
 
@@ -204,10 +207,15 @@ static void run_test(int test_num, int pub_qos, int sub_qos, int delay_ms, int m
         
         usleep(PARAM_SETTLE_MS * 1000);
         
-        MQTTClient_publish(g_client, "request/go", (int)strlen("start"), "start", 1, 0, NULL);
         g_test_start_ts = get_timestamp_ms();
-        fprintf(stderr, "analyser: 'start' sent. Running %ds..\n", TEST_DURATION_S);
-        
+        char start_payload[32];
+        snprintf(start_payload, sizeof(start_payload), "start:%lld", g_test_start_ts);
+        g_nonce = g_test_start_ts;  // store for on_message to check
+
+        MQTTClient_publish(g_client, "request/go",
+                           (int)strlen(start_payload), start_payload, 1, 0, NULL);
+        fprintf(stderr, "analyser: 'start' sent (nonce=%lld). Running %ds..\n", g_nonce, TEST_DURATION_S);
+
         int waited = 0;
         int limit = TEST_DURATION_S + TIMEOUT_GRACE_S;
         while (!g_done && waited < limit) {
@@ -223,6 +231,8 @@ static void run_test(int test_num, int pub_qos, int sub_qos, int delay_ms, int m
             if (retry > 0) {
                 fprintf(stderr, "analyser: retry succeeded for test [%d/%d]\n", test_num, N_TESTS);
             }
+
+            g_logger.test_success = retry; 
             
             write_ts_meta(&g_logger, g_test_start_ts, g_test_end_ts);
             logger_flush(&g_logger);

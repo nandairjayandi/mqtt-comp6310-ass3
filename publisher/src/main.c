@@ -43,6 +43,7 @@ static volatile int cfg_delay_ms = 100;
 static volatile int cfg_msg_size = 1;
 static volatile int g_start = 0;
 static volatile int g_abort = 0;
+static char g_start_nonce[32] = {0};
 
 static MQTTClient g_client;
 
@@ -207,7 +208,10 @@ static int on_message(void *context, char *topic, int topic_len, MQTTClient_mess
         cfg_msg_size = atoi(payload); fprintf(stderr, "publisher: config msg_size=%d\n", cfg_msg_size);
 
     } else if (strcmp(topic, "request/go") == 0) {
-        if (strcmp(payload, "start") == 0) {
+        if (strncmp(payload, "start:", 6) == 0) {
+            // Store the nonce so run_burst() can include it in "done"
+            strncpy(g_start_nonce, payload + 6, sizeof(g_start_nonce) - 1);
+            g_start_nonce[sizeof(g_start_nonce) - 1] = '\0';
             g_abort = 0;
             g_start = 1;
         }
@@ -254,8 +258,10 @@ int main(int argc, char *argv[]) {
         if (g_start) {
             g_start = 0;
             run_burst();
-            MQTTClient_publish(g_client, "request/go", (int)strlen("done"), "done", 1, 0, NULL);
-            fprintf(stderr, "publisher: sent 'done' to request/go\n");
+            char done_payload[40];
+            snprintf(done_payload, sizeof(done_payload), "done:%s", g_start_nonce);
+            MQTTClient_publish(g_client, "request/go", (int)strlen(done_payload), done_payload, 1, 0, NULL);
+            fprintf(stderr, "publisher: sent '%s' to request/go\n", done_payload);
             fprintf(stderr, "publisher: ready for next run\n");
         }
         usleep(10000);  // 10ms poll. Low CPU pressure, fast enough response
